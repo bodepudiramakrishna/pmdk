@@ -106,12 +106,9 @@
 #include <iostream>
 #include <fstream>
 #include <errno.h>
-using namespace std;
 
 #define PMEMOBJ_EXT ".obj"
 #define MAX_PATH_LEN 255
-
-ofstream file;
 
 
 static handler *pmdk_create_handler(handlerton *hton,
@@ -120,114 +117,13 @@ static handler *pmdk_create_handler(handlerton *hton,
 
 handlerton *pmdk_hton;
 
+
 static MYSQL_THDVAR_ULONG(varopt_default, PLUGIN_VAR_RQCMDARG,
-  "default value of the VAROPT table option", NULL, NULL, 5, 0, 100, 0);
-
-/**
-  Structure for CREATE TABLE options (table options).
-  It needs to be called ha_table_option_struct.
-
-  The option values can be specified in the CREATE TABLE at the end:
-  CREATE TABLE ( ... ) *here*
-*/
-
-struct ha_table_option_struct
-{
-  const char *strparam;
-  ulonglong ullparam;
-  uint enumparam;
-  bool boolparam;
-  ulonglong varparam;
-};
-
-
-/**
-  Structure for CREATE TABLE options (field options).
-  It needs to be called ha_field_option_struct.
-
-  The option values can be specified in the CREATE TABLE per field:
-  CREATE TABLE ( field ... *here*, ... )
-*/
-
-struct ha_field_option_struct
-{
-  const char *complex_param_to_parse_it_in_engine;
-};
-
-/*
-  no pmdk here, but index options can be declared similarly
-  using the ha_index_option_struct structure.
-
-  Their values can be specified in the CREATE TABLE per index:
-  CREATE TABLE ( field ..., .., INDEX .... *here*, ... )
-*/
-
-ha_create_table_option pmdk_table_option_list[]=
-{
-  /*
-    one numeric option, with the default of UINT_MAX32, valid
-    range of values 0..UINT_MAX32, and a "block size" of 10
-    (any value must be divisible by 10).
-  */
-  HA_TOPTION_NUMBER("ULL", ullparam, UINT_MAX32, 0, UINT_MAX32, 10),
-  /*
-    one option that takes an arbitrary string
-  */
-  HA_TOPTION_STRING("STR", strparam),
-  /*
-    one enum option. a valid values are strings ONE and TWO.
-    A default value is 0, that is "one".
-  */
-  HA_TOPTION_ENUM("one_or_two", enumparam, "one,two", 0),
-  /*
-    one boolean option, the valid values are YES/NO, ON/OFF, 1/0.
-    The default is 1, that is true, yes, on.
-  */
-  HA_TOPTION_BOOL("YESNO", boolparam, 1),
-  /*
-    one option defined by the system variable. The type, the range, or
-    a list of allowed values is the same as for the system variable.
-  */
-  HA_TOPTION_SYSVAR("VAROPT", varparam, varopt_default),
-
-  HA_TOPTION_END
-};
-
-ha_create_table_option pmdk_field_option_list[]=
-{
-  /*
-    If the engine wants something more complex than a string, number, enum,
-    or boolean - for pmdk a list - it needs to specify the option
-    as a string and parse it internally.
-  */
-  HA_FOPTION_STRING("COMPLEX", complex_param_to_parse_it_in_engine),
-  HA_FOPTION_END
-};
-
-
-/**
-  @brief
-  Function we use in the creation of our hash to get key.
-*/
+"default value of the VAROPT table option", NULL, NULL, 5, 0, 100, 0);
 
 #ifdef HAVE_PSI_INTERFACE
 static PSI_mutex_key ex_key_mutex_pmdk_share_mutex;
-
-static PSI_mutex_info all_pmdk_mutexes[]=
-{
-  { &ex_key_mutex_pmdk_share_mutex, "pmdk_share::mutex", 0}
-};
-
-static void init_pmdk_psi_keys()
-{
-  const char* category= "pmdk";
-  int count;
-
-  count= array_elements(all_pmdk_mutexes);
-  mysql_mutex_register(category, all_pmdk_mutexes, count);
-}
 #endif
-
 
 /**
   @brief
@@ -271,16 +167,10 @@ static int pmdk_init_func(void *p)
 {
   DBUG_ENTER("pmdk_init_func");
 
-#ifdef HAVE_PSI_INTERFACE
-  init_pmdk_psi_keys();
-#endif
-
   pmdk_hton= (handlerton *)p;
   pmdk_hton->state=   SHOW_OPTION_YES;
   pmdk_hton->create=  pmdk_create_handler;
   pmdk_hton->flags=   HTON_CAN_RECREATE;
-  pmdk_hton->table_options= pmdk_table_option_list;
-  pmdk_hton->field_options= pmdk_field_option_list;
   pmdk_hton->tablefile_extensions= ha_pmdk_exts;
 
   DBUG_RETURN(0);
@@ -360,15 +250,6 @@ int ha_pmdk::open(const char *name, int mode, uint test_if_locked)
     DBUG_RETURN(1);
   thr_lock_data_init(&share->lock,&lock,NULL);
 
-#ifndef DBUG_OFF
-  ha_table_option_struct *options= table->s->option_struct;
-
-  DBUG_ASSERT(options);
-  DBUG_PRINT("info", ("strparam: '%-.64s'  ullparam: %llu  enumparam: %u  "\
-                      "boolparam: %u",
-                      (options->strparam ? options->strparam : "<NULL>"),
-                      options->ullparam, options->enumparam, options->boolparam));
-#endif
   char path[MAX_PATH_LEN];
   snprintf(path, MAX_PATH_LEN, "%s%s", name, PMEMOBJ_EXT);
 
@@ -450,7 +331,6 @@ int ha_pmdk::write_row(uchar *buf)
     DBUG_RETURN(errCodeMap[errno]);
 
   stats.records++;
-
 
   DBUG_RETURN(0);
 }
@@ -944,7 +824,6 @@ ha_rows ha_pmdk::records_in_range(uint inx, key_range *min_key,
 int ha_pmdk::create(const char *name, TABLE *table_arg,
                        HA_CREATE_INFO *create_info)
 {
-#ifndef DBUG_OFF
 
   char path[MAX_PATH_LEN];
   DBUG_ENTER("ha_pmdk::create");
@@ -960,7 +839,6 @@ int ha_pmdk::create(const char *name, TABLE *table_arg,
   DBUG_PRINT("info", ("Success"));
   pmemobj_close(pop);
 
-#endif
   DBUG_RETURN(0);
 }
 
