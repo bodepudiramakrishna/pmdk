@@ -41,22 +41,33 @@
 #include "handler.h"                     /* handler */
 #include "my_base.h"                     /* ha_rows */
 #include <libpmemobj.h>
+#include <libpmemobj++/p.hpp>
+#include <libpmemobj++/persistent_ptr.hpp>
 #include <map>
 
+using namespace pmem::obj;
 
 POBJ_LAYOUT_BEGIN(mysql_obj);
 POBJ_LAYOUT_TOID(mysql_obj, struct table_row);
+POBJ_LAYOUT_TOID(mysql_obj, struct row);
 POBJ_LAYOUT_END(mysql_obj);
 
 struct table_row {
     uchar buf[PMEMOBJ_MIN_POOL];
 };
-
 struct row_args {
 	uchar *buf;
 	size_t len;
 };
 
+struct row {
+    uchar buf[PMEMOBJ_MIN_POOL];
+    persistent_ptr<row> next;
+};
+
+struct root {
+    persistent_ptr<row> rows;
+};
 int row_construct(PMEMobjpool *pop, void *ptr, void *args);
 
 /** @brief
@@ -88,6 +99,8 @@ class ha_pmdk: public handler
 private:
   PMEMobjpool *objtab;
   std::map<int,int> errCodeMap;
+  persistent_ptr<row> iter;
+  persistent_ptr<row> current;
 
 public:
   ha_pmdk(handlerton *hton, TABLE_SHARE *table_arg);

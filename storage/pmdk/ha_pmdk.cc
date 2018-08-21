@@ -256,7 +256,6 @@ int ha_pmdk::open(const char *name, int mode, uint test_if_locked)
   objtab = pmemobj_open(path, name);
   if (objtab == NULL)
     DBUG_RETURN(errCodeMap[errno]);
-
   DBUG_RETURN(0);
 }
 
@@ -322,17 +321,20 @@ int ha_pmdk::write_row(uchar *buf)
 {
   DBUG_ENTER("ha_pmdk::write_row");
   DBUG_PRINT("info", ("write_row"));
-
-  struct row_args args = {buf, table->s->reclength};
-  TOID(struct table_row) row;
-  POBJ_ALLOC(objtab, &row, struct table_row, table->s->reclength, row_construct, &args);
-
-  if (row.oid.off == 0)
-    DBUG_RETURN(errCodeMap[errno]);
-
+  int err = 0;
+  persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
+  TX_BEGIN(objtab){
+	persistent_ptr<row> row = pmemobj_tx_alloc(sizeof (row), 0);
+	memcpy(row->buf, buf, table->s->reclength);
+        row->next = proot->rows;
+        proot->rows = row;
+  }TX_ONABORT {
+  DBUG_PRINT("info", ("write_row_ABORT"));
+	  err = HA_ERR_OUT_OF_MEM;
+  } TX_END
   stats.records++;
 
-  DBUG_RETURN(0);
+  DBUG_RETURN(err);
 }
 
 
@@ -388,6 +390,11 @@ int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
 int ha_pmdk::delete_row(const uchar *buf)
 {
   DBUG_ENTER("ha_pmdk::delete_row");
+  persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
+  TX_BEGIN(objtab) {
+	pmemobj_tx_free(proot->rows.raw());
+	proot->rows = nullptr;
+  } TX_END
   DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 }
 
@@ -513,12 +520,22 @@ int ha_pmdk::index_read(uchar*  buf, const uchar* key, uint key_len, ha_rkey_fun
 int ha_pmdk::rnd_init(bool scan)
 {
   DBUG_ENTER("ha_pmdk::rnd_init");
+  DBUG_PRINT("info", ("rnd_init"));
+  persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
+  TX_BEGIN(objtab) {
+    iter = proot->rows;
+  } TX_ONABORT {
+	DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+  } TX_END
   DBUG_RETURN(0);
 }
 
 int ha_pmdk::rnd_end()
 {
   DBUG_ENTER("ha_pmdk::rnd_end");
+  DBUG_PRINT("info", ("rnd_end"));
+  iter = NULL;
+  current = NULL;
   DBUG_RETURN(0);
 }
 
@@ -539,11 +556,17 @@ int ha_pmdk::rnd_end()
 */
 int ha_pmdk::rnd_next(uchar *buf)
 {
-  int rc;
-  DBUG_ENTER("ha_pmdk::rnd_next"); 
+  DBUG_ENTER("ha_pmdk::rnd_next");
+  DBUG_PRINT("info", ("rnd_next"));
 
-  rc= HA_ERR_END_OF_FILE;
-  DBUG_RETURN(rc);
+  if (!iter) 
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+  memcpy(buf, iter->buf, table->s->reclength);
+
+  current = iter;
+  iter = iter->next;
+  DBUG_RETURN(0);
 }
 
 
@@ -841,7 +864,6 @@ int ha_pmdk::create(const char *name, TABLE *table_arg,
 
   DBUG_RETURN(0);
 }
-
 struct st_mysql_storage_engine pmdk_storage_engine=
 { MYSQL_HANDLERTON_INTERFACE_VERSION };
 
