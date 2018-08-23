@@ -117,7 +117,6 @@ static handler *pmdk_create_handler(handlerton *hton,
 
 handlerton *pmdk_hton;
 
-
 static MYSQL_THDVAR_ULONG(varopt_default, PLUGIN_VAR_RQCMDARG,
 "default value of the VAROPT table option", NULL, NULL, 5, 0, 100, 0);
 
@@ -146,14 +145,6 @@ static PSI_mutex_key ex_key_mutex_pmdk_share_mutex;
 static const char *ha_pmdk_exts[] = {
   NullS
 };
-
-int row_construct(PMEMobjpool *pop, void *ptr, void *args)
-{
-  struct row_args *r = (struct row_args *)args;
-  struct table_row *row = (struct table_row *)ptr;
-  pmemobj_memcpy_persist(pop, row->buf, r->buf, r->len);
-  return 0;
-}
 
 pmdk_share::pmdk_share()
 {
@@ -324,7 +315,7 @@ int ha_pmdk::write_row(uchar *buf)
   int err = 0;
   persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
   TX_BEGIN(objtab){
-	persistent_ptr<row> row = pmemobj_tx_alloc(sizeof (row), 0);
+	persistent_ptr<row> row = pmemobj_tx_alloc(sizeof (row)+strlen((const char*)buf), 0);
 	memcpy(row->buf, buf, table->s->reclength);
         row->next = proot->rows;
         proot->rows = row;
@@ -363,7 +354,10 @@ int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
 
   DBUG_ENTER("ha_pmdk::update_row");
   DBUG_PRINT("info", ("update_row"));
-  DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+  TX_BEGIN(objtab) {
+    memcpy(current->buf, new_data, table->s->reclength);
+  } TX_END
+  DBUG_RETURN(0);
 }
 
 
@@ -389,13 +383,35 @@ int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
 
 int ha_pmdk::delete_row(const uchar *buf)
 {
-  DBUG_ENTER("ha_pmdk::delete_row");
+  DBUG_ENTER("ha_pmdk::delete_row"); 
+  DBUG_PRINT("info", ("delete_row"));
   persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
-  TX_BEGIN(objtab) {
-	pmemobj_tx_free(proot->rows.raw());
+  if (!prev) {
+    if (!current->next) { // sll contains single node
+      TX_BEGIN(objtab) {
+	pmemobj_tx_free(current.raw());
 	proot->rows = nullptr;
-  } TX_END
-  DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+      } TX_END
+    } else { // first node of sll
+      TX_BEGIN(objtab) {
+        pmemobj_tx_free(current.raw());
+	current = NULL;
+      } TX_END
+      proot->rows = iter;
+    }
+  } else {
+    if (!current->next) { // last node of sll
+      prev->next = NULL;
+    } else { // other nodes of sll
+      prev->next = current->next;    
+      current = NULL; 
+    }
+    TX_BEGIN(objtab) {
+      pmemobj_tx_free(current.raw());
+    } TX_END
+  }
+  stats.records--;
+  DBUG_RETURN(0);
 }
 
 
@@ -522,11 +538,8 @@ int ha_pmdk::rnd_init(bool scan)
   DBUG_ENTER("ha_pmdk::rnd_init");
   DBUG_PRINT("info", ("rnd_init"));
   persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
-  TX_BEGIN(objtab) {
-    iter = proot->rows;
-  } TX_ONABORT {
-	DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-  } TX_END
+  current=prev=NULL;
+  iter = proot->rows;
   DBUG_RETURN(0);
 }
 
@@ -558,12 +571,11 @@ int ha_pmdk::rnd_next(uchar *buf)
 {
   DBUG_ENTER("ha_pmdk::rnd_next");
   DBUG_PRINT("info", ("rnd_next"));
-
   if (!iter) 
     DBUG_RETURN(HA_ERR_END_OF_FILE);
-
   memcpy(buf, iter->buf, table->s->reclength);
-
+  if (current != NULL)
+     prev = current;
   current = iter;
   iter = iter->next;
   DBUG_RETURN(0);

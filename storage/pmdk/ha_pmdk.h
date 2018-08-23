@@ -61,14 +61,13 @@ struct row_args {
 };
 
 struct row {
-    uchar buf[PMEMOBJ_MIN_POOL];
     persistent_ptr<row> next;
+    uchar buf[];
 };
 
 struct root {
     persistent_ptr<row> rows;
 };
-int row_construct(PMEMobjpool *pop, void *ptr, void *args);
 
 /** @brief
   pmdk_share is a class that will be shared among all open handlers.
@@ -86,7 +85,6 @@ public:
   }
 };
 
-
 /** @brief
   Class definition for the storage engine
 */
@@ -101,6 +99,7 @@ private:
   std::map<int,int> errCodeMap;
   persistent_ptr<row> iter;
   persistent_ptr<row> current;
+  persistent_ptr<row> prev;
 
 public:
   ha_pmdk(handlerton *hton, TABLE_SHARE *table_arg);
