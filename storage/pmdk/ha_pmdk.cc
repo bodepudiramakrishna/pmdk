@@ -395,19 +395,19 @@ int ha_pmdk::delete_row(const uchar *buf)
     } else { // first node of sll
       TX_BEGIN(objtab) {
         pmemobj_tx_free(current.raw());
-	current = NULL;
+	current = nullptr;
       } TX_END
       proot->rows = iter;
     }
   } else {
     if (!current->next) { // last node of sll
-      prev->next = NULL;
+      prev->next = nullptr;
     } else { // other nodes of sll
       prev->next = current->next;    
-      current = NULL; 
     }
     TX_BEGIN(objtab) {
       pmemobj_tx_free(current.raw());
+      current = nullptr; 
     } TX_END
   }
   stats.records--;
