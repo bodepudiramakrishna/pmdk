@@ -315,10 +315,10 @@ int ha_pmdk::write_row(uchar *buf)
   int err = 0;
   persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
   TX_BEGIN(objtab){
-	persistent_ptr<row> row = pmemobj_tx_alloc(sizeof (row)+strlen((const char*)buf), 0);
-	memcpy(row->buf, buf, table->s->reclength);
-        row->next = proot->rows;
-        proot->rows = row;
+    persistent_ptr<row> row = pmemobj_tx_alloc(sizeof (row) + table->s->reclength, 0);
+    TX_MEMCPY(row->buf, buf, table->s->reclength);
+    row->next = proot->rows;
+    proot->rows = row;
   }TX_ONABORT {
   DBUG_PRINT("info", ("write_row_ABORT"));
 	  err = HA_ERR_OUT_OF_MEM;
@@ -355,7 +355,7 @@ int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
   DBUG_ENTER("ha_pmdk::update_row");
   DBUG_PRINT("info", ("update_row"));
   TX_BEGIN(objtab) {
-    memcpy(current->buf, new_data, table->s->reclength);
+    TX_MEMCPY(current->buf, new_data, table->s->reclength);
   } TX_END
   DBUG_RETURN(0);
 }
@@ -387,26 +387,26 @@ int ha_pmdk::delete_row(const uchar *buf)
   DBUG_PRINT("info", ("delete_row"));
   persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
   if (!prev) {
-    if (!current->next) { // sll contains single node
+    if (!current->next) { // When sll contains single node
       TX_BEGIN(objtab) {
-	pmemobj_tx_free(current.raw());
+	delete_persistent<row>(current);
 	proot->rows = nullptr;
       } TX_END
-    } else { // first node of sll
+    } else { // When deleting the first node of sll
       TX_BEGIN(objtab) {
-        pmemobj_tx_free(current.raw());
+	delete_persistent<row>(current);
 	current = nullptr;
       } TX_END
       proot->rows = iter;
     }
   } else {
-    if (!current->next) { // last node of sll
+    if (!current->next) { // When deleting the last node of sll
       prev->next = nullptr;
-    } else { // other nodes of sll
+    } else { // When deleting other nodes of sll
       prev->next = current->next;    
     }
     TX_BEGIN(objtab) {
-      pmemobj_tx_free(current.raw());
+      delete_persistent<row>(current);
       current = nullptr; 
     } TX_END
   }
@@ -571,13 +571,17 @@ int ha_pmdk::rnd_next(uchar *buf)
 {
   DBUG_ENTER("ha_pmdk::rnd_next");
   DBUG_PRINT("info", ("rnd_next"));
-  if (!iter) 
+
+  if (!iter) {
     DBUG_RETURN(HA_ERR_END_OF_FILE);
+  }
   memcpy(buf, iter->buf, table->s->reclength);
-  if (current != NULL)
-     prev = current;
+  if (current != NULL) {
+    prev = current;
+  }
   current = iter;
   iter = iter->next;
+
   DBUG_RETURN(0);
 }
 
