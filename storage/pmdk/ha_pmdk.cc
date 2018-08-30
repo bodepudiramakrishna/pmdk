@@ -110,6 +110,8 @@
 #define PMEMOBJ_EXT ".obj"
 #define MAX_PATH_LEN 255
 
+database* database::m_db=NULL;
+
 
 static handler *pmdk_create_handler(handlerton *hton,
                                        TABLE_SHARE *table, 
@@ -313,6 +315,7 @@ int ha_pmdk::write_row(uchar *buf)
   DBUG_ENTER("ha_pmdk::write_row");
   DBUG_PRINT("info", ("write_row"));
   int err = 0;
+
   persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
   TX_BEGIN(objtab){
     persistent_ptr<row> row = pmemobj_tx_alloc(sizeof (row) + table->s->reclength, 0);
@@ -860,6 +863,7 @@ ha_rows ha_pmdk::records_in_range(uint inx, key_range *min_key,
   ha_create_table() in handle.cc
 */
 
+
 int ha_pmdk::create(const char *name, TABLE *table_arg,
                        HA_CREATE_INFO *create_info)
 {
@@ -880,6 +884,212 @@ int ha_pmdk::create(const char *name, TABLE *table_arg,
 
   DBUG_RETURN(0);
 }
+
+
+/**
+  @brief
+Function to insert the row value in the index row map
+*/
+
+
+
+int key::insert(const uchar* keyValue, persistent_ptr<row> row_1)
+{
+  DBUG_ENTER("in key::insert");
+  DBUG_PRINT("info", ("in key::insert %s",keyValue));
+   std::pair<const uchar*, persistent_ptr<row> > r(keyValue, row_1);
+   rows.insert(r);
+  DBUG_RETURN(0);
+}
+
+
+/**
+  @brief
+Function to update the row value in the Index row Map
+
+*/
+
+
+bool key::updateRow(const uchar* keyValue, persistent_ptr<row> row_1)
+{
+   bool ret = false;
+   auto r = rows.find(keyValue); 
+   if (r != rows.end()) {
+      std::pair<const uchar*, persistent_ptr<row> > q(r->first, row_1);
+      rows.erase(r);
+      rows.insert(q);
+      ret = true;
+   }
+   return ret;
+}
+
+
+/**
+  @brief
+Function to delete the row value in the Index row Map
+*/
+
+bool key::deleteRow(const uchar* keyValue)
+{
+   bool ret = false;
+   auto it = rows.find(keyValue);
+   if (it != rows.end()) {
+      rows.erase(it);
+      ret = true;
+   }
+   return ret;
+}
+
+std::multimap<const uchar*, persistent_ptr<row> >& key::getRowsMap()
+{
+  return rows;
+}
+
+/**
+  @brief
+Function to set the Map position
+*/
+
+void key::setMapPosition(std::multimap<const uchar*, persistent_ptr<row> >::iterator iter)
+{
+  mapPosition = iter;
+}
+
+
+
+std::multimap<const uchar*, persistent_ptr<row> >::iterator key::getFirst()
+{
+  return rows.begin();
+}
+
+std::multimap<const uchar*, persistent_ptr<row> >::iterator key::getNext()
+{
+  return ++mapPosition;
+}
+
+std::multimap<const uchar*, persistent_ptr<row> >::iterator key::getLast()
+{
+  return rows.end();
+}
+
+
+/**
+  @brief
+Function to verify the Key Value
+*/
+
+bool key::verifyKey(const uchar* key, persistent_ptr<row> row_1)
+{
+
+   bool ret = false;
+   auto it = rows.find(key);
+   if (it != rows.end()) {
+      row_1 = it->second;
+      ret = true;
+   }
+   return ret;
+}
+
+/**
+  @brief
+Function to verify the Key Value
+*/
+
+bool table_::getKeys(const char* columnName, key **p)
+{
+  DBUG_ENTER("in getKeys");
+  DBUG_PRINT("info", ("in getKeys"));
+   bool ret = false;
+   auto k = keys.find(columnName);
+   if (k != keys.end())
+   {
+      *p = k->second;
+      ret = true;
+   }
+  DBUG_RETURN(ret);
+}
+
+/**
+  @brief
+Function to insert the value in the table map
+*/
+
+int table_::insert(const char* columnName, key* k)
+{
+  DBUG_ENTER("in table_::insert");
+  DBUG_PRINT("info", ("in table_::insert"));
+  std::pair<const char*, key*> key1(columnName, k);
+  keys.insert(key1);
+  DBUG_RETURN(0);
+}
+
+/**
+  @brief
+Function to return the Key Map
+*/
+
+
+std::unordered_map<const char*, key*>& table_::getKeysMap()
+{
+  return keys;
+}
+
+/**
+  @brief
+Function to get the instance of the Database Class
+*/
+
+
+database* database::getInstance()
+{ 
+  DBUG_ENTER("in Getinstance");
+  DBUG_PRINT("info", ("in Getinstance"));
+   if (!m_db)
+      m_db = new database();
+   DBUG_RETURN(m_db);
+}
+
+/**
+  @brief
+Function to get the instance of the Table in the Map
+*/
+
+
+bool database::getTable(const char* tableName, table_ **t)
+{ 
+  DBUG_ENTER("in Gettable");
+  DBUG_PRINT("info", ("in Gettable"));
+  bool ret = false;
+  auto t1 = tables.find(tableName); 
+  if (t1 != tables.end()) { 
+    *t = t1->second;
+    ret = true;
+  }
+  DBUG_RETURN(ret);
+}
+
+/**
+  @brief
+Function to insert the table name in the Map
+*/
+
+
+int database::insert(const char* tableName, table_* t)
+{
+  DBUG_ENTER("database::insert");
+  DBUG_PRINT("info", ("database::insert "));
+
+  std::pair<const char*, table_*> table(tableName, t);
+  tables.insert (table);
+  auto itr = tables.find(tableName);
+
+  DBUG_RETURN(0);
+}
+std::unordered_map<const char*, table_*>& database::getTablesMap()
+{
+  return tables;
+}
+
 struct st_mysql_storage_engine pmdk_storage_engine=
 { MYSQL_HANDLERTON_INTERFACE_VERSION };
 

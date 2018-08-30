@@ -45,6 +45,7 @@
 #include <libpmemobj++/persistent_ptr.hpp>
 #include <libpmemobj++/make_persistent.hpp>
 #include <map>
+#include <unordered_map>
 
 using namespace pmem::obj;
 
@@ -106,7 +107,7 @@ public:
   ha_pmdk(handlerton *hton, TABLE_SHARE *table_arg);
   ~ha_pmdk()
   {
-    if(!errCodeMap.empty())
+    if (!errCodeMap.empty())
       errCodeMap.clear();
   }
 
@@ -142,7 +143,10 @@ public:
   */
   ulong index_flags(uint inx, uint part, bool all_parts) const
   {
-    return 0;
+        ulong flags = HA_READ_NEXT | HA_READ_PREV | HA_READ_ORDER
+                      | HA_READ_RANGE | HA_KEYREAD_ONLY;
+
+        return(flags);
   }
 
   /** @brief
@@ -185,7 +189,7 @@ public:
     There is no need to implement ..._key_... methods if your engine doesn't
     support indexes.
    */
-  uint max_supported_key_length()    const { return 10; }
+  uint max_supported_key_length()    const { return 128; }
 
   /** @brief
     Called in test_quick_select to determine if indexes should be used.
@@ -301,4 +305,46 @@ public:
   void populate_errcodemap(void);
 };
 
+typedef std::multimap<const uchar*, persistent_ptr<row> >::iterator rowItr;
 
+class key
+{
+   public:
+      int insert(const uchar* keyValue, persistent_ptr<row> row);
+      bool updateRow(const uchar* keyValue, persistent_ptr<row> row);
+      bool deleteRow(const uchar* keyValue);
+      std::multimap<const uchar*, persistent_ptr<row> >& getRowsMap();
+      void setMapPosition(rowItr iter);
+      rowItr getFirst();
+      rowItr getNext();
+      rowItr getLast();
+      bool verifyKey(const uchar* key, persistent_ptr<row> row_1);
+   private:
+      std::multimap<const uchar*, persistent_ptr<row> > rows;
+      rowItr mapPosition;
+};
+
+class table_
+{
+   public:
+      bool getKeys(const char* columnName, key **p);
+      int insert(const char* columnName, key*);
+      std::unordered_map<const char*, key*>& getKeysMap();
+   private:
+      std::unordered_map<const char*, key*> keys;
+};
+
+class database
+{
+   public:
+      static database* getInstance();
+      bool getTable(const char* tableName,table_ **t);
+      int insert(const char* tableName, table_*);
+      std::unordered_map<const char*, table_*>& getTablesMap();
+      void print();
+   private:
+      database(){}
+      database(const database &){}
+      std::unordered_map<const char*, table_*> tables;
+      static database *m_db;
+};
