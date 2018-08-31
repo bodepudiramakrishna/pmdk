@@ -311,7 +311,7 @@ class key
 {
    public:
       int insert(const uchar* keyValue, persistent_ptr<row> row);
-      bool updateRow(const uchar* keyValue, persistent_ptr<row> row);
+      bool update(const uchar* keyValue, persistent_ptr<row> row);
       bool deleteRow(const uchar* keyValue);
       std::multimap<const uchar*, persistent_ptr<row> >& getRowsMap();
       void setMapPosition(rowItr iter);

@@ -319,7 +319,6 @@ int ha_pmdk::write_row(uchar *buf)
   persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
     persistent_ptr<row> row;
   TX_BEGIN(objtab) {
-    //persistent_ptr<row> row = pmemobj_tx_alloc(sizeof (row) + table->s->reclength, 0);
     row = pmemobj_tx_alloc(sizeof (row) + table->s->reclength, 0);
     TX_MEMCPY(row->buf, buf, table->s->reclength);
     row->next = proot->rows;
@@ -479,9 +478,24 @@ int ha_pmdk::index_read_map(uchar *buf, const uchar *key,
 
 int ha_pmdk::index_next(uchar *buf)
 {
-  int rc;
+  int rc = 0;
   DBUG_ENTER("ha_pmdk::index_next");
-  rc= HA_ERR_WRONG_COMMAND;
+  DBUG_PRINT("info", ("index_next"));
+
+  database *db = database::getInstance();
+  table_ *tab;
+  key *k1;
+  if (db->getTable(table->s->table_name.str, &tab)) {
+    Field **field = table->field;
+    if (tab->getKeys((*field)->field_name.str, &k1)) {
+      std::multimap<const uchar*, persistent_ptr<row> >::iterator nextNode = k1->getNext();
+      if (nextNode == k1->getLast()) {
+        DBUG_RETURN(HA_ERR_END_OF_FILE);
+      }
+      iter = nextNode->second;
+      memcpy(buf, iter->buf, table->s->reclength);
+    }
+  }
   DBUG_RETURN(rc);
 }
 
@@ -512,10 +526,24 @@ int ha_pmdk::index_prev(uchar *buf)
 */
 int ha_pmdk::index_first(uchar *buf)
 {
-  int rc;
+  int rc=0;
   DBUG_ENTER("ha_pmdk::index_first");
-  rc= HA_ERR_WRONG_COMMAND;
-  DBUG_RETURN(rc);
+  DBUG_PRINT("info", ("index_first"));
+  MYSQL_INDEX_READ_ROW_START(table_share->db.str, table_share->table_name.str);
+
+  database *db = database::getInstance();
+  table_ *tab;
+  key *k1;
+  if (db->getTable(table->s->table_name.str, &tab)) {
+     Field **field = table->field;
+     if (tab->getKeys((*field)->field_name.str, &k1)) {
+	std::multimap<const uchar*, persistent_ptr<row> >::iterator it = k1->getFirst();
+        iter = it->second;
+        k1->setMapPosition(it);
+        memcpy(buf, iter->buf, table->s->reclength);
+     }
+  }
+  DBUG_RETURN(0);
 }
 
 
@@ -936,28 +964,6 @@ int key::insert(const uchar* keyValue, persistent_ptr<row> row_1)
   DBUG_RETURN(0);
 }
 
-
-/**
-  @brief
-Function to update the row value in the Index row Map
-
-*/
-
-
-bool key::updateRow(const uchar* keyValue, persistent_ptr<row> row_1)
-{
-   bool ret = false;
-   auto r = rows.find(keyValue); 
-   if (r != rows.end()) {
-      std::pair<const uchar*, persistent_ptr<row> > q(r->first, row_1);
-      rows.erase(r);
-      rows.insert(q);
-      ret = true;
-   }
-   return ret;
-}
-
-
 /**
   @brief
 Function to delete the row value in the Index row Map
@@ -965,13 +971,17 @@ Function to delete the row value in the Index row Map
 
 bool key::deleteRow(const uchar* keyValue)
 {
-   bool ret = false;
-   auto it = rows.find(keyValue);
-   if (it != rows.end()) {
-      rows.erase(it);
-      ret = true;
-   }
-   return ret;
+   return TRUE;
+}
+
+/**
+  @brief
+Function to update the row value in the Index row Map
+
+*/
+bool key::update(const uchar* keyValue, persistent_ptr<row> row_1)
+{
+   return TRUE;
 }
 
 std::multimap<const uchar*, persistent_ptr<row> >& key::getRowsMap()
