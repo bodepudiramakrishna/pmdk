@@ -279,7 +279,6 @@ int ha_pmdk::close(void)
   DBUG_RETURN(0);
 }
 
-
 /**
   @brief
   write_row() inserts a row. No extra() hint is given currently if a bulk load
@@ -315,20 +314,52 @@ int ha_pmdk::write_row(uchar *buf)
   DBUG_ENTER("ha_pmdk::write_row");
   DBUG_PRINT("info", ("write_row"));
   int err = 0;
+  uchar *key_ = 0;
 
   persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
-  TX_BEGIN(objtab){
-    persistent_ptr<row> row = pmemobj_tx_alloc(sizeof (row) + table->s->reclength, 0);
+    persistent_ptr<row> row;
+  TX_BEGIN(objtab) {
+    //persistent_ptr<row> row = pmemobj_tx_alloc(sizeof (row) + table->s->reclength, 0);
+    row = pmemobj_tx_alloc(sizeof (row) + table->s->reclength, 0);
     TX_MEMCPY(row->buf, buf, table->s->reclength);
     row->next = proot->rows;
     proot->rows = row;
   }TX_ONABORT {
-  DBUG_PRINT("info", ("write_row_ABORT"));
+  DBUG_PRINT("info", ("write_row_abort"));
 	  err = HA_ERR_OUT_OF_MEM;
   } TX_END
   stats.records++;
 
-  DBUG_RETURN(err);
+  database *db = database::getInstance();
+  table_ *tab;
+  key *k;
+
+  for (Field **field = table->field; *field; field++)
+  {
+     if ((*field)->key_start.to_ulonglong() >= 1)
+     {
+       key_ = (uchar *)my_malloc((*field)->field_length, MYF(MY_ZEROFILL | MY_WME));
+       memcpy(key_, (*field)->ptr, (*field)->key_length());
+       if (db->getTable(table->s->table_name.str, &tab)) {
+	  if (tab->getKeys((*field)->field_name.str, &k)) {
+	    k->insert(key_, row);
+	  } else {
+	    key *keyPtr = new key;
+	    keyPtr->insert(key_, row);
+	    tab->insert((*field)->field_name.str, keyPtr);
+	 }
+       } else {
+         table_ *tPtr = new table_;
+	 key *keyPtr = new key;
+
+	 keyPtr->insert(key_, row);
+	 tPtr->insert((*field)->field_name.str, keyPtr);
+	 db->insert(table->s->table_name.str, tPtr);
+       }
+     }
+   }
+
+   DBUG_RETURN(err);
 }
 
 
@@ -390,12 +421,14 @@ int ha_pmdk::delete_row(const uchar *buf)
   DBUG_PRINT("info", ("delete_row"));
   persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
   if (!prev) {
-    if (!current->next) { // When sll contains single node
+    if (!current->next) { 
+// When sll contains single node
       TX_BEGIN(objtab) {
 	delete_persistent<row>(current);
 	proot->rows = nullptr;
       } TX_END
-    } else { // When deleting the first node of sll
+    } else { 
+// When deleting the first node of sll
       TX_BEGIN(objtab) {
 	delete_persistent<row>(current);
 	current = nullptr;
@@ -403,9 +436,11 @@ int ha_pmdk::delete_row(const uchar *buf)
       proot->rows = iter;
     }
   } else {
-    if (!current->next) { // When deleting the last node of sll
+    if (!current->next) { 
+// When deleting the last node of sll
       prev->next = nullptr;
-    } else { // When deleting other nodes of sll
+    } else { 
+// When deleting other nodes of sll
       prev->next = current->next;    
     }
     TX_BEGIN(objtab) {
@@ -862,7 +897,6 @@ ha_rows ha_pmdk::records_in_range(uint inx, key_range *min_key,
   @see
   ha_create_table() in handle.cc
 */
-
 
 int ha_pmdk::create(const char *name, TABLE *table_arg,
                        HA_CREATE_INFO *create_info)

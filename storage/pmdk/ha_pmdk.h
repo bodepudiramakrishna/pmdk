@@ -341,7 +341,6 @@ class database
       bool getTable(const char* tableName,table_ **t);
       int insert(const char* tableName, table_*);
       std::unordered_map<const char*, table_*>& getTablesMap();
-      void print();
    private:
       database(){}
       database(const database &){}
