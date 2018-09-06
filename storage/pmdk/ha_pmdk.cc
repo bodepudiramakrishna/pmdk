@@ -155,6 +155,29 @@ pmdk_share::pmdk_share()
                    &mutex, MY_MUTEX_INIT_FAST);
 }
 
+int ha_pmdk::start_stmt(THD *thd, thr_lock_type lock_type)
+{
+  DBUG_ENTER("ha_pmdk::start_stmt");
+  DBUG_PRINT("info", ("start_stmt"));
+  pmemobj_tx_begin(objtab,NULL,TX_PARAM_NONE);
+  DBUG_RETURN(0);
+}
+static int pmdk_rollback(handlerton* hton,THD* thd,bool rollback_trx)
+{
+  DBUG_ENTER("ha_pmdk::rollback");
+  DBUG_PRINT("info", ("rollback :%d",errno));
+  //pmemobj_tx_abort(-1);
+  //pmemobj_tx_end();
+  DBUG_RETURN(0);
+}
+static int pmdk_commit(handlerton* hton,THD *thd,bool commit_trx)
+{
+  DBUG_ENTER("ha_pmdk::commit");
+  DBUG_PRINT("info", ("commit"));
+  //pmemobj_tx_commit();
+  //pmemobj_tx_end();
+  DBUG_RETURN(0);
+}
 
 static int pmdk_init_func(void *p)
 {
@@ -165,6 +188,9 @@ static int pmdk_init_func(void *p)
   pmdk_hton->create=  pmdk_create_handler;
   pmdk_hton->flags=   HTON_CAN_RECREATE;
   pmdk_hton->tablefile_extensions= ha_pmdk_exts;
+
+  pmdk_hton->commit= pmdk_commit;
+  pmdk_hton->rollback= pmdk_rollback;
 
   DBUG_RETURN(0);
 }
@@ -249,6 +275,68 @@ int ha_pmdk::open(const char *name, int mode, uint test_if_locked)
   objtab = pmemobj_open(path, name);
   if (objtab == NULL)
     DBUG_RETURN(errCodeMap[errno]);
+
+ 
+
+  // update the MAP when restart the server 
+
+  database *db = database::getInstance();
+  table_ *tab;
+  key *k;
+  persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
+  persistent_ptr<row> row = proot->rows;
+  int ix =1,val = 0;
+  while(row)
+  {
+    for (Field **field = table->field; *field; field++)
+    {
+       DBUG_PRINT("info", ("column : %s type :%lu ix :%d",(*field)->field_name.str,(*field)->key_start.to_ulonglong(),ix));
+       uchar *key_ = (uchar *)my_malloc((*field)->field_length, MYF(MY_ZEROFILL | MY_WME));
+       if(key_)
+       {
+         memcpy(key_,row->buf+ix, (*field)->key_length());
+         val = 0;
+         if((*field)->type() == 3) 
+	 { // If the column is INT
+	   if ((*field)->key_start.to_ulonglong() >= 1){ 
+             val = (key_[3] << 24) + (key_[2] << 16) + (key_[1] << 8) + (key_[0]);
+             DBUG_PRINT("info", ("integer %d",val)); 
+	     goto insert;
+	   }
+           ix +=4;
+	 }  
+         else { // If the column is VARCHAR
+	   if ((*field)->key_start.to_ulonglong() >= 1)  
+	   {
+             DBUG_PRINT("info", ("string : %s",key_+1));
+	     goto insert;
+	   }
+	   ix += (*field)->field_length;
+         }
+insert:
+	 if (db->getTable(table->s->table_name.str, &tab)) {
+	   if (tab->getKeys((*field)->field_name.str, &k)) {
+	     k->insert(key_+1, row);
+	    } else {
+	      key *keyPtr = new key;
+	      keyPtr->insert(key_+1, row);
+	      tab->insert((*field)->field_name.str, keyPtr);
+	    }
+         } else {
+           table_ *tPtr = new table_;
+	   key *keyPtr = new key;
+
+	   keyPtr->insert(key_+1, row);
+	   tPtr->insert((*field)->field_name.str, keyPtr);
+	   db->insert(table->s->table_name.str, tPtr);
+         }
+       }
+       
+    }
+    row = row->next;
+  }
+
+
   DBUG_RETURN(0);
 }
 
@@ -316,22 +404,50 @@ int ha_pmdk::write_row(uchar *buf)
   int err = 0;
   uchar *key_ = 0;
 
+  database *db = database::getInstance();
+  table_ *tab;
+  key *k;
+
+  /*
+  // Primary Key 
+  Field **field = table->field;
+  for (int i= 0; i < table->s->keys; i++) {
+    KEY* key_info = &table->key_info[i];
+    std::cout<<"primary key: "<<key_info->name.str<<std::endl;
+    if (memcmp("PRIMARY",key_info->name.str,sizeof("PRIMARY"))==0) {
+       key_ = (uchar *)my_malloc((*field)->field_length, MYF(MY_ZEROFILL | MY_WME));
+       memcpy(key_, (*field)->ptr, (*field)->key_length());
+       DBUG_PRINT("info", ("---------------Key Value----------%s",key_));
+       DBUG_PRINT("info", ("---------------Coloumn Value----------%s",(*field)->field_name.str));
+
+       if (db->getTable(table->s->table_name.str, &tab)) {
+	 if (tab->getKeys((*field)->field_name.str, &k)) {
+	   persistent_ptr<row> p;     
+	   bool ret = k->verifyKey(key_, p);
+	   if (!ret)
+  	     DBUG_RETURN(err);
+         }
+       }
+    }
+  } 
+  // Primary Key End
+  // */
+
   persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
     persistent_ptr<row> row;
   TX_BEGIN(objtab) {
     row = pmemobj_tx_alloc(sizeof (row) + table->s->reclength, 0);
-    TX_MEMCPY(row->buf, buf, table->s->reclength);
+    memcpy(row->buf, buf, table->s->reclength);
     row->next = proot->rows;
     proot->rows = row;
   }TX_ONABORT {
-  DBUG_PRINT("info", ("write_row_abort"));
-	  err = HA_ERR_OUT_OF_MEM;
+  DBUG_PRINT("info", ("write_row_abort errno :%d ",errno));
+	  err = errno;
   } TX_END
   stats.records++;
 
-  database *db = database::getInstance();
-  table_ *tab;
-  key *k;
+  
+  
 
   for (Field **field = table->field; *field; field++)
   {
@@ -341,17 +457,17 @@ int ha_pmdk::write_row(uchar *buf)
        memcpy(key_, (*field)->ptr, (*field)->key_length());
        if (db->getTable(table->s->table_name.str, &tab)) {
 	  if (tab->getKeys((*field)->field_name.str, &k)) {
-	    k->insert(key_, row);
+	    k->insert(key_+1, row);
 	  } else {
 	    key *keyPtr = new key;
-	    keyPtr->insert(key_, row);
+	    keyPtr->insert(key_+1, row);
 	    tab->insert((*field)->field_name.str, keyPtr);
 	 }
        } else {
          table_ *tPtr = new table_;
 	 key *keyPtr = new key;
 
-	 keyPtr->insert(key_, row);
+	 keyPtr->insert(key_+1, row);
 	 tPtr->insert((*field)->field_name.str, keyPtr);
 	 db->insert(table->s->table_name.str, tPtr);
        }
@@ -459,15 +575,37 @@ int ha_pmdk::delete_row(const uchar *buf)
   index.
 */
 
-int ha_pmdk::index_read_map(uchar *buf, const uchar *key,
+int ha_pmdk::index_read_map(uchar *buf, const uchar *key_,
                                key_part_map keypart_map __attribute__((unused)),
                                enum ha_rkey_function find_flag
                                __attribute__((unused)))
 {
-  int rc;
   DBUG_ENTER("ha_pmdk::index_read");
-  rc= HA_ERR_WRONG_COMMAND;
-  DBUG_RETURN(rc);
+  DBUG_PRINT("info", ("index_read_map Entered"));
+
+  KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
+
+  database *db = database::getInstance();
+  table_ *tab;
+  key *k;
+
+  if (db->getTable(table->s->table_name.str, &tab)) 
+  {
+     if (key_part->field->key_start.to_ulonglong() >= 1)
+     {
+       if (tab->getKeys(key_part->field->field_name.str, &k)) 
+       {
+	 if (k->verifyKey(key_+2, current)) 
+	 {
+            memcpy(buf, current->buf, table->s->reclength);
+         } else
+           DBUG_RETURN(HA_ERR_END_OF_FILE);
+       }
+     } else
+       DBUG_RETURN(HA_ERR_END_OF_FILE);
+  }
+  DBUG_PRINT("info", ("index_read_map End"));
+  DBUG_RETURN(0);
 }
 
 
@@ -485,16 +623,25 @@ int ha_pmdk::index_next(uchar *buf)
   database *db = database::getInstance();
   table_ *tab;
   key *k1;
+  KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
   if (db->getTable(table->s->table_name.str, &tab)) {
-    Field **field = table->field;
-    if (tab->getKeys((*field)->field_name.str, &k1)) {
-      std::multimap<const uchar*, persistent_ptr<row> >::iterator nextNode = k1->getNext();
-      if (nextNode == k1->getLast()) {
-        DBUG_RETURN(HA_ERR_END_OF_FILE);
-      }
-      iter = nextNode->second;
-      memcpy(buf, iter->buf, table->s->reclength);
-    }
+    if (key_part->field->key_start.to_ulonglong() >= 1)
+    {
+      if (tab->getKeys(key_part->field->field_name.str, &k1)) {
+        //std::multimap<const uchar*, persistent_ptr<row> >::iterator nextNode = k1->getNext();
+        rowItr nextNode = k1->getNext();
+        if (nextNode == k1->getLast()) {
+          DBUG_RETURN(HA_ERR_END_OF_FILE);
+        }
+        prev = current;
+        current = nextNode->second;
+        memcpy(buf, current->buf, table->s->reclength);
+      } else
+        rc = HA_ERR_END_OF_FILE;
+    } else
+      rc = HA_ERR_END_OF_FILE;
+  } else {
+     rc = HA_ERR_END_OF_FILE;
   }
   DBUG_RETURN(rc);
 }
@@ -530,20 +677,26 @@ int ha_pmdk::index_first(uchar *buf)
   DBUG_ENTER("ha_pmdk::index_first");
   DBUG_PRINT("info", ("index_first"));
   MYSQL_INDEX_READ_ROW_START(table_share->db.str, table_share->table_name.str);
+  KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
 
   database *db = database::getInstance();
   table_ *tab;
   key *k1;
   if (db->getTable(table->s->table_name.str, &tab)) {
-     Field **field = table->field;
-     if (tab->getKeys((*field)->field_name.str, &k1)) {
-	std::multimap<const uchar*, persistent_ptr<row> >::iterator it = k1->getFirst();
-        iter = it->second;
-        k1->setMapPosition(it);
-        memcpy(buf, iter->buf, table->s->reclength);
-     }
-  }
-  DBUG_RETURN(0);
+     if (key_part->field->key_start.to_ulonglong() >= 1)
+     {
+       if (tab->getKeys(key_part->field->field_name.str, &k1)) {
+         //std::multimap<const uchar*, persistent_ptr<row> >::iterator it = k1->getFirst();
+         rowItr it = k1->getFirst();
+         current = it->second;
+         k1->setMapPosition(it);
+         memcpy(buf, current->buf, table->s->reclength);
+      }
+    } else 
+       rc = HA_ERR_END_OF_FILE;
+  } else 
+       rc = HA_ERR_END_OF_FILE;
+  DBUG_RETURN(rc);
 }
 
 
@@ -561,6 +714,7 @@ int ha_pmdk::index_last(uchar *buf)
 {
   int rc;
   DBUG_ENTER("ha_pmdk::index_last");
+  
   rc= HA_ERR_WRONG_COMMAND;
   DBUG_RETURN(rc);
 }
@@ -571,12 +725,17 @@ int ha_pmdk::index_init(
         bool)
 {
   DBUG_ENTER("index_init");
+  DBUG_PRINT("info", ("index_init"));
+  current = prev = NULL;
+  active_index = keynr;
   DBUG_RETURN(0);
 }
 
 int ha_pmdk::index_end()
 { 
   DBUG_ENTER("index_end");
+  DBUG_PRINT("info", ("index_end"));
+  active_index = MAX_KEY;
   DBUG_RETURN(0);
 }
 
@@ -807,6 +966,22 @@ int ha_pmdk::delete_all_rows()
 int ha_pmdk::external_lock(THD *thd, int lock_type)
 {
   DBUG_ENTER("ha_pmdk::external_lock");
+  DBUG_PRINT("info", ("external_lock"));
+  static int val = 0;
+  if (lock_type != F_UNLCK)
+  {
+    if(val == 0)
+    {
+      trans_register_ha(thd,FALSE,ht);
+      val = 1;
+    }
+    if( val == 1 && thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN))
+    {
+      trans_register_ha(thd,TRUE,ht);
+      pmemobj_tx_begin(objtab,NULL,TX_PARAM_NONE);
+      val = 0;
+    }
+  }
   DBUG_RETURN(0);
 }
 
@@ -1022,14 +1197,19 @@ std::multimap<const uchar*, persistent_ptr<row> >::iterator key::getLast()
 Function to verify the Key Value
 */
 
-bool key::verifyKey(const uchar* key, persistent_ptr<row> row_1)
+bool key::verifyKey(const uchar* key, persistent_ptr<row> &row_1)
 {
 
    bool ret = false;
-   auto it = rows.find(key);
-   if (it != rows.end()) {
-      row_1 = it->second;
-      ret = true;
+   for (auto it = rows.begin(); it != rows.end(); ++it) {
+     if (memcmp(it->first, key, sizeof(it->first))==0)
+     {
+       
+       row_1 = it->second;
+       mapPosition = it;
+       ret = true;
+       break;
+     }
    }
    return ret;
 }
@@ -1125,7 +1305,6 @@ int database::insert(const char* tableName, table_* t)
 
   std::pair<const char*, table_*> table(tableName, t);
   tables.insert (table);
-  auto itr = tables.find(tableName);
 
   DBUG_RETURN(0);
 }

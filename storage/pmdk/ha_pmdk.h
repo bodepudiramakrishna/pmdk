@@ -303,6 +303,7 @@ public:
   THR_LOCK_DATA **store_lock(THD *thd, THR_LOCK_DATA **to,
                              enum thr_lock_type lock_type);     ///< required
   void populate_errcodemap(void);
+  int start_stmt(THD *thd, thr_lock_type lock_type);
 };
 
 typedef std::multimap<const uchar*, persistent_ptr<row> >::iterator rowItr;
@@ -318,7 +319,8 @@ class key
       rowItr getFirst();
       rowItr getNext();
       rowItr getLast();
-      bool verifyKey(const uchar* key, persistent_ptr<row> row_1);
+      bool verifyKey(const uchar* key, persistent_ptr<row> &row_1);
+      void print();
    private:
       std::multimap<const uchar*, persistent_ptr<row> > rows;
       rowItr mapPosition;
