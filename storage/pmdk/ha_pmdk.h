@@ -47,6 +47,7 @@
 #include <map>
 #include <unordered_map>
 
+
 using namespace pmem::obj;
 
 POBJ_LAYOUT_BEGIN(mysql_obj);
@@ -312,14 +313,15 @@ class key
 {
    public:
       int insert(const uchar* keyValue, persistent_ptr<row> row);
-      bool update(const uchar* keyValue, persistent_ptr<row> row);
+      bool updateRow(const uchar* oldKeyValue, const uchar* newKeyValue);
       bool deleteRow(const uchar* keyValue);
       std::multimap<const uchar*, persistent_ptr<row> >& getRowsMap();
       void setMapPosition(rowItr iter);
       rowItr getFirst();
       rowItr getNext();
       rowItr getLast();
-      bool verifyKey(const uchar* key, persistent_ptr<row> &row_1);
+      bool isRowEmpty();
+      bool verifyKey(const uchar* key, persistent_ptr<row> &row_1, int size);
       void print();
    private:
       std::multimap<const uchar*, persistent_ptr<row> > rows;
@@ -331,6 +333,8 @@ class table_
    public:
       bool getKeys(const char* columnName, key **p);
       int insert(const char* columnName, key*);
+      bool deleteKey(const char* columnName);
+      bool isKeysEmpty();	
       std::unordered_map<const char*, key*>& getKeysMap();
    private:
       std::unordered_map<const char*, key*> keys;
@@ -342,7 +346,10 @@ class database
       static database* getInstance();
       bool getTable(const char* tableName,table_ **t);
       int insert(const char* tableName, table_*);
+      bool deleteTable(const char* TableName);
+      bool isTablesEmpty();
       std::unordered_map<const char*, table_*>& getTablesMap();
+     
    private:
       database(){}
       database(const database &){}

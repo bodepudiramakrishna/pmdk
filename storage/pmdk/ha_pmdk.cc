@@ -408,31 +408,25 @@ int ha_pmdk::write_row(uchar *buf)
   table_ *tab;
   key *k;
 
-  /*
-  // Primary Key 
-  Field **field = table->field;
+  // Primary Key Start
   for (int i= 0; i < table->s->keys; i++) {
     KEY* key_info = &table->key_info[i];
-    std::cout<<"primary key: "<<key_info->name.str<<std::endl;
+     std::cout<<"\n\n\n\nPrimary Key : "<<std::endl;
     if (memcmp("PRIMARY",key_info->name.str,sizeof("PRIMARY"))==0) {
-       key_ = (uchar *)my_malloc((*field)->field_length, MYF(MY_ZEROFILL | MY_WME));
-       memcpy(key_, (*field)->ptr, (*field)->key_length());
-       DBUG_PRINT("info", ("---------------Key Value----------%s",key_));
-       DBUG_PRINT("info", ("---------------Coloumn Value----------%s",(*field)->field_name.str));
-
+       Field *field = key_info->key_part->field;
+       key_ = (uchar *)my_malloc(field->field_length, MYF(MY_ZEROFILL | MY_WME));
+       memcpy(key_, field->ptr, field->key_length());
+       DBUG_PRINT("info", ("primary key :%s",field->field_name.str));
        if (db->getTable(table->s->table_name.str, &tab)) {
-	 if (tab->getKeys((*field)->field_name.str, &k)) {
-	   persistent_ptr<row> p;     
-	   bool ret = k->verifyKey(key_, p);
-	   if (!ret)
-  	     DBUG_RETURN(err);
-         }
+	  if (tab->getKeys(field->field_name.str, &k)) {
+	     persistent_ptr<row> p;
+	     std::cout<<"\n\n\n\nPrimary Key : "<<key_<<std::endl;
+	     if (k->verifyKey(key_+1, p, table->s->reclength))
+  	        DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
+          }
        }
     }
   } 
-  // Primary Key End
-  // */
-
   persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
     persistent_ptr<row> row;
   TX_BEGIN(objtab) {
@@ -447,8 +441,6 @@ int ha_pmdk::write_row(uchar *buf)
   stats.records++;
 
   
-  
-
   for (Field **field = table->field; *field; field++)
   {
      if ((*field)->key_start.to_ulonglong() >= 1)
@@ -500,12 +492,29 @@ int ha_pmdk::write_row(uchar *buf)
 */
 int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
 {
-
+  database *db = database::getInstance();
+  table_ *tab;
+  key *k;
+  //TODO Update the Persistent Memory
   DBUG_ENTER("ha_pmdk::update_row");
-  DBUG_PRINT("info", ("update_row"));
+  DBUG_PRINT("info", ("In update_row : New Data value: %s Old Data value: %s",new_data+1,old_data+2));
   TX_BEGIN(objtab) {
     TX_MEMCPY(current->buf, new_data, table->s->reclength);
   } TX_END
+
+  //If the table is an indexed table then update the index_HA_ERR_END_OF_FILE
+    Field **field = table->field;
+    if ((*field)->key_start.to_ulonglong() == 1) {
+ 	DBUG_PRINT("info", ("Updation in a indexed field ---- "));
+       if (db->getTable(table->s->table_name.str, &tab)) {
+           if (tab->getKeys((*field)->field_name.str, &k)) {		
+			bool retKey = k->updateRow(old_data,new_data);
+			if(retKey){
+				DBUG_PRINT("info", ("************Updation successful in Index also :%d ",retKey));
+       	      } 
+       	    }
+       	 } 
+ 	  } 
   DBUG_RETURN(0);
 }
 
@@ -535,6 +544,13 @@ int ha_pmdk::delete_row(const uchar *buf)
   DBUG_ENTER("ha_pmdk::delete_row"); 
   DBUG_PRINT("info", ("delete_row"));
   persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
+  
+  database *db = database::getInstance();
+  table_ *tab;
+  key *k;
+  int rc = 0;
+
+  
   if (!prev) {
     if (!current->next) { 
 // When sll contains single node
@@ -562,11 +578,37 @@ int ha_pmdk::delete_row(const uchar *buf)
       delete_persistent<row>(current);
       current = nullptr; 
     } TX_END
-  }
-  stats.records--;
-  DBUG_RETURN(0);
-}
+  } 
+  Field **field = table->field;
+        if ((*field)->key_start.to_ulonglong() == 1) {
+ 	   DBUG_PRINT("info", ("Deletion can happen This is a indexed field ---- "));
+           if (db->getTable(table->s->table_name.str, &tab)) {
+             if (tab->getKeys((*field)->field_name.str, &k)) {		
+		bool retKey = k->deleteRow(buf+1);
+		
+        	if (retKey ==1 && k->isRowEmpty()) {
+        	  //If all the row are empty delete the Key Value associated with the Row
+		  bool retRow = tab->deleteKey((*field)->field_name.str);
+		 
+		  //If all the Keys are empty delete the table Value associated with the Row
+		  if (retRow ==1 && tab->isKeysEmpty()) {
+		    bool retTable = db->deleteTable(table->s->table_name.str);
+		    
+		     //If all the Tables are empty delete the databse in the index.	
+		     if (retTable==1 && db->isTablesEmpty()){
+		       delete db;
+		     }
+		  }
+        	}
+       	      } 
+       	    }     
+ 	  } 
 
+        stats.records--;
+  
+  DBUG_RETURN(rc);
+
+}
 
 /**
   @brief
@@ -595,7 +637,7 @@ int ha_pmdk::index_read_map(uchar *buf, const uchar *key_,
      {
        if (tab->getKeys(key_part->field->field_name.str, &k)) 
        {
-	 if (k->verifyKey(key_+2, current)) 
+	 if (k->verifyKey(key_+2, current, table->s->reclength)) 
 	 {
             memcpy(buf, current->buf, table->s->reclength);
          } else
@@ -967,7 +1009,7 @@ int ha_pmdk::external_lock(THD *thd, int lock_type)
 {
   DBUG_ENTER("ha_pmdk::external_lock");
   DBUG_PRINT("info", ("external_lock"));
-  static int val = 0;
+  /*static int val = 0;
   if (lock_type != F_UNLCK)
   {
     if(val == 0)
@@ -975,13 +1017,13 @@ int ha_pmdk::external_lock(THD *thd, int lock_type)
       trans_register_ha(thd,FALSE,ht);
       val = 1;
     }
-    if( val == 1 && thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN))
+    if( val == 1 )//&& thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN))
     {
       trans_register_ha(thd,TRUE,ht);
-      pmemobj_tx_begin(objtab,NULL,TX_PARAM_NONE);
+      DBUG_PRINT("info", ("pmemobj_tx_begin %d ",pmemobj_tx_begin(objtab,NULL,TX_PARAM_NONE)));
       val = 0;
     }
-  }
+  }*/
   DBUG_RETURN(0);
 }
 
@@ -1139,14 +1181,34 @@ int key::insert(const uchar* keyValue, persistent_ptr<row> row_1)
   DBUG_RETURN(0);
 }
 
-/**
-  @brief
-Function to delete the row value in the Index row Map
-*/
 
-bool key::deleteRow(const uchar* keyValue)
+bool key::isRowEmpty()
 {
-   return TRUE;
+   bool ret = false;
+   if (rows.empty()) {
+      ret = true;
+      
+   }
+   return ret;
+}
+
+bool table_::isKeysEmpty()
+{
+   bool ret = false;
+   if (keys.empty()) {
+  
+      ret = true;
+   }
+   return ret;
+}
+
+bool database::isTablesEmpty()
+{
+   bool ret = false;
+   if (tables.empty()) {
+      ret = true;
+   }
+   return ret;
 }
 
 /**
@@ -1154,15 +1216,28 @@ bool key::deleteRow(const uchar* keyValue)
 Function to update the row value in the Index row Map
 
 */
-bool key::update(const uchar* keyValue, persistent_ptr<row> row_1)
-{
-   return TRUE;
-}
 
 std::multimap<const uchar*, persistent_ptr<row> >& key::getRowsMap()
 {
   return rows;
 }
+
+bool key::deleteRow(const uchar* key)
+{
+   bool ret = false;
+   for (auto it = rows.begin(); it != rows.end(); ++it) {
+         
+     if ((memcmp(it->first, key, sizeof(it->first))==0)&& (it != rows.end()))
+     {
+   	   rows.erase(it);
+   	   ret = true;   	   
+   	   break;
+   }
+
+   }
+   return ret;
+}
+
 
 /**
   @brief
@@ -1197,12 +1272,13 @@ std::multimap<const uchar*, persistent_ptr<row> >::iterator key::getLast()
 Function to verify the Key Value
 */
 
-bool key::verifyKey(const uchar* key, persistent_ptr<row> &row_1)
+bool key::verifyKey(const uchar* key, persistent_ptr<row> &row_1,int size)
 {
 
    bool ret = false;
    for (auto it = rows.begin(); it != rows.end(); ++it) {
-     if (memcmp(it->first, key, sizeof(it->first))==0)
+
+     if (memcmp(it->first, key, size)==0)
      {
        
        row_1 = it->second;
@@ -1210,6 +1286,50 @@ bool key::verifyKey(const uchar* key, persistent_ptr<row> &row_1)
        ret = true;
        break;
      }
+   }
+   return ret;
+}
+
+bool key::updateRow(const uchar* oldValue, const uchar* newValue)
+{
+   persistent_ptr<row> row_;
+   bool ret = false;
+   for (auto it = rows.begin(); it != rows.end(); ++it) {
+
+     if (memcmp(it->first, oldValue, sizeof(it->first))==0)
+     {
+       row_ = it->second;
+	   rows.erase(it);
+	   
+	   std::pair<const uchar*, persistent_ptr<row> > r(newValue, row_);
+       rows.insert(r);
+       break;
+     }
+   }
+   return ret;
+}
+
+bool database::deleteTable(const char* TableName)
+{
+
+   bool ret = false;
+   delete(tables[TableName]);
+   if (tables.erase(TableName)){
+
+     ret = true;
+   }
+   return ret;
+}
+
+
+bool table_::deleteKey(const char* columnName)
+{
+
+   bool ret = false;
+   delete(keys[columnName]);
+   if (keys.erase(columnName)){
+
+     ret = true;
    }
    return ret;
 }
