@@ -411,16 +411,16 @@ int ha_pmdk::write_row(uchar *buf)
   // Primary Key Start
   for (int i= 0; i < table->s->keys; i++) {
     KEY* key_info = &table->key_info[i];
-     std::cout<<"\n\n\n\nPrimary Key : "<<std::endl;
+
     if (memcmp("PRIMARY",key_info->name.str,sizeof("PRIMARY"))==0) {
        Field *field = key_info->key_part->field;
        key_ = (uchar *)my_malloc(field->field_length, MYF(MY_ZEROFILL | MY_WME));
        memcpy(key_, field->ptr, field->key_length());
-       DBUG_PRINT("info", ("primary key :%s",field->field_name.str));
+
        if (db->getTable(table->s->table_name.str, &tab)) {
 	  if (tab->getKeys(field->field_name.str, &k)) {
 	     persistent_ptr<row> p;
-	     std::cout<<"\n\n\n\nPrimary Key : "<<key_<<std::endl;
+
 	     if (k->verifyKey(key_+1, p, table->s->reclength))
   	        DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
           }
@@ -497,7 +497,7 @@ int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
   key *k;
   //TODO Update the Persistent Memory
   DBUG_ENTER("ha_pmdk::update_row");
-  DBUG_PRINT("info", ("In update_row : New Data value: %s Old Data value: %s",new_data+1,old_data+2));
+
   TX_BEGIN(objtab) {
     TX_MEMCPY(current->buf, new_data, table->s->reclength);
   } TX_END
@@ -510,7 +510,7 @@ int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
            if (tab->getKeys((*field)->field_name.str, &k)) {		
 			bool retKey = k->updateRow(old_data,new_data);
 			if(retKey){
-				DBUG_PRINT("info", ("************Updation successful in Index also :%d ",retKey));
+				DBUG_PRINT("info", ("*Updation successful in Index also :%d ",retKey));
        	      } 
        	    }
        	 } 
