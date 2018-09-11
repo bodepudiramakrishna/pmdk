@@ -103,6 +103,7 @@ private:
   persistent_ptr<row> iter;
   persistent_ptr<row> current;
   persistent_ptr<row> prev;
+  persistent_ptr<root> proot;
 
 public:
   ha_pmdk(handlerton *hton, TABLE_SHARE *table_arg);
@@ -304,6 +305,7 @@ public:
   THR_LOCK_DATA **store_lock(THD *thd, THR_LOCK_DATA **to,
                              enum thr_lock_type lock_type);     ///< required
   void populate_errcodemap(void);
+  void insertRowIntoIndexTable(Field *field, uchar *key_, persistent_ptr<row> row);
   int start_stmt(THD *thd, thr_lock_type lock_type);
 };
 
@@ -320,8 +322,9 @@ class key
       rowItr getFirst();
       rowItr getNext();
       rowItr getLast();
+      bool verifyKey(const uchar* key);
+      bool verifyKey(const uchar* key, persistent_ptr<row> &iter, persistent_ptr<row> &current,persistent_ptr<row> &prev);
       bool isRowEmpty();
-      bool verifyKey(const uchar* key, persistent_ptr<row> &row_1, int size);
       void print();
    private:
       std::multimap<const uchar*, persistent_ptr<row> > rows;
