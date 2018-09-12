@@ -577,11 +577,10 @@ int ha_pmdk::delete_row(const uchar *buf)
     DBUG_PRINT("info", ("Deletion can happen This is a indexed field ---- "));
     if (db->getTable(table->s->table_name.str, &tab)) {
       if (tab->getKeys(key_part->field->field_name.str, &k)) {
-        bool retKey = k->deleteRow(buf+2);
-
-       	if (retKey ==1 && k->isRowEmpty()) {
+        rowItr currNode = k->getCurrent();	
+        bool retKey = k->deleteRow(currNode);
+       	if (k->isRowEmpty()) {
        	  //If all the row are empty delete the Key Value associated with the Row
-	  //bool retRow = tab->deleteKey((*field)->field_name.str);
 	  bool retRow = tab->deleteKey(key_part->field->field_name.str);
 
 	  //If all the Keys are empty delete the table Value associated with the Row
@@ -635,7 +634,8 @@ int ha_pmdk::index_read_map(uchar *buf, const uchar *key_,
        if (tab->getKeys(key_part->field->field_name.str, &k)) 
        {
 	 if (k->verifyKey(key_+2, iter, current, prev)) 
-            memcpy(buf, current->buf, table->s->reclength);
+	    rowItr currNode = k->getCurrent();
+            memcpy(buf, currNode->second->buf, table->s->reclength);
          else
            DBUG_RETURN(HA_ERR_END_OF_FILE);
        }
@@ -658,10 +658,6 @@ int ha_pmdk::index_next(uchar *buf)
   int rc = 0;
   DBUG_ENTER("ha_pmdk::index_next");
   DBUG_PRINT("info", ("index_next"));
-
-  if (!iter)
-    DBUG_RETURN(HA_ERR_END_OF_FILE);
-
   database *db = database::getInstance();
   table_ *tab;
   key *k1;
@@ -670,12 +666,12 @@ int ha_pmdk::index_next(uchar *buf)
     if (key_part->field->key_start.to_ulonglong() >= 1)
     {
       if (tab->getKeys(key_part->field->field_name.str, &k1)) {
-        //std::multimap<const uchar*, persistent_ptr<row> >::iterator nextNode = k1->getNext();
         rowItr nextNode = k1->getNext();
         if (nextNode == k1->getLast()) {
           DBUG_RETURN(HA_ERR_END_OF_FILE);
         }
-        memcpy(buf, iter->buf, table->s->reclength);
+        memcpy(buf, nextNode->second->buf, table->s->reclength);
+	// Following three are useful only for the delete_row and update_row methods
 	prev = current;
         current = iter;
         iter = nextNode->second;
@@ -729,11 +725,9 @@ int ha_pmdk::index_first(uchar *buf)
      if (key_part->field->key_start.to_ulonglong() >= 1)
      {
        if (tab->getKeys(key_part->field->field_name.str, &k1)) {
-         //std::multimap<const uchar*, persistent_ptr<row> >::iterator it = k1->getFirst();
          rowItr it = k1->getFirst();
-         iter = it->second;
          k1->setMapPosition(it);
-         memcpy(buf, iter->buf, table->s->reclength);
+         memcpy(buf, it->second->buf, table->s->reclength);
 	 current = iter;
 	 iter = current->next;
       }
@@ -1224,18 +1218,8 @@ std::multimap<const uchar*, persistent_ptr<row> >& key::getRowsMap()
 
 bool key::deleteRow(const uchar* key)
 {
-   bool ret = false;
-   for (auto it = rows.begin(); it != rows.end(); ++it) {
-         
-     if ((memcmp(it->first, key, sizeof(it->first))==0)&& (it != rows.end()))
-     {
-   	   rows.erase(it);
-   	   ret = true;   	   
-   	   break;
-   }
-
-   }
-   return ret;
+  rows.erase(currNode);
+  return true;
 }
 
 
@@ -1248,12 +1232,14 @@ void key::setMapPosition(std::multimap<const uchar*, persistent_ptr<row> >::iter
 {
   mapPosition = iter;
 }
-
-
-
 std::multimap<const uchar*, persistent_ptr<row> >::iterator key::getFirst()
 {
   return rows.begin();
+}
+
+std::multimap<const uchar*, persistent_ptr<row> >::iterator key::getCurrent()
+{
+  return mapPosition;
 }
 
 std::multimap<const uchar*, persistent_ptr<row> >::iterator key::getNext()

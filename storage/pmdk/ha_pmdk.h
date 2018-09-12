@@ -316,11 +316,12 @@ class key
    public:
       int insert(const uchar* keyValue, persistent_ptr<row> row);
       bool updateRow(const uchar* oldKeyValue, const uchar* newKeyValue);
-      bool deleteRow(const uchar* keyValue);
+      bool deleteRow(rowItr currNode);
       std::multimap<const uchar*, persistent_ptr<row> >& getRowsMap();
       void setMapPosition(rowItr iter);
       rowItr getFirst();
       rowItr getNext();
+      rowItr getCurrent();
       rowItr getLast();
       bool verifyKey(const uchar* key);
       bool verifyKey(const uchar* key, persistent_ptr<row> &iter, persistent_ptr<row> &current,persistent_ptr<row> &prev);
