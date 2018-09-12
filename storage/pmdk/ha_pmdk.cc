@@ -633,9 +633,11 @@ int ha_pmdk::index_read_map(uchar *buf, const uchar *key_,
      {
        if (tab->getKeys(key_part->field->field_name.str, &k)) 
        {
-	 if (k->verifyKey(key_+2, iter, current, prev)) 
+	 if (k->verifyKey(key_+2, iter, current, prev))
+	 { 
 	    rowItr currNode = k->getCurrent();
             memcpy(buf, currNode->second->buf, table->s->reclength);
+	 }
          else
            DBUG_RETURN(HA_ERR_END_OF_FILE);
        }
@@ -1216,7 +1218,7 @@ std::multimap<const uchar*, persistent_ptr<row> >& key::getRowsMap()
   return rows;
 }
 
-bool key::deleteRow(const uchar* key)
+bool key::deleteRow(rowItr currNode)
 {
   rows.erase(currNode);
   return true;
