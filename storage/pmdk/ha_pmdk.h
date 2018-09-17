@@ -318,6 +318,7 @@ class key
       bool updateRow(const uchar* oldKeyValue, const uchar* newKeyValue);
       bool deleteRow(rowItr currNode);
       std::multimap<const uchar*, persistent_ptr<row> >& getRowsMap();
+      std::multimap<const uchar*, persistent_ptr<row> >& gettempRowsMap();
       void setMapPosition(rowItr iter);
       rowItr getFirst();
       rowItr getNext();
@@ -329,6 +330,7 @@ class key
       void print();
    private:
       std::multimap<const uchar*, persistent_ptr<row> > rows;
+      std::multimap<const uchar*, persistent_ptr<row> > temprows;
       rowItr mapPosition;
 };
 

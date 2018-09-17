@@ -173,6 +173,35 @@ static int pmdk_rollback(handlerton* hton,THD* thd,bool rollback_trx)
     pmemobj_tx_abort(-1);
     pmemobj_tx_end();
     transaction_started = 0;
+
+    database *db = database::getInstance();
+    for (auto& table : db->getTablesMap())
+    {
+      DBUG_PRINT("info", ("Table:First->%s",table.first));
+      for (auto& key : table.second->getKeysMap()) {
+        for (auto& temptable : key.second->gettempRowsMap()) {
+          for (auto& table : key.second->getRowsMap())
+          {
+            if(temptable.second == table.second)
+            {
+              DBUG_PRINT("info", ("Row:First->%s",table.first));
+              DBUG_PRINT("info", ("Row:second->%d",table.second));
+              key.second->getRowsMap().erase(table.first);
+              key.second->gettempRowsMap().erase(temptable.first);
+            }
+          }
+        }
+        for (auto& temptable : key.second->gettempRowsMap()) {
+          auto& table = key.second->getRowsMap();
+          DBUG_PRINT("info", ("tempRow:First->%s",temptable.first));
+          DBUG_PRINT("info", ("tempRow:second->%d",temptable.second));
+          std::pair<const uchar*, persistent_ptr<row> > r(temptable.first,temptable.second);
+	  table.insert(r);
+          key.second->gettempRowsMap().erase(temptable.first);
+	}
+      }
+    }    
+
   }
   DBUG_RETURN(0);
 }
@@ -1172,9 +1201,11 @@ int key::insert(const uchar* keyValue, persistent_ptr<row> row_1)
 {
   DBUG_ENTER("in key::insert");
   DBUG_PRINT("info", ("in key::insert %s",keyValue));
-   std::pair<const uchar*, persistent_ptr<row> > r(keyValue, row_1);
-   rows.insert(r);
-   DBUG_RETURN(0);
+  std::pair<const uchar*, persistent_ptr<row> > r(keyValue, row_1);
+  rows.insert(r);
+  if(transaction_started)
+    temprows.insert(r);
+  DBUG_RETURN(0);
 }
 
 
@@ -1217,9 +1248,17 @@ std::multimap<const uchar*, persistent_ptr<row> >& key::getRowsMap()
 {
   return rows;
 }
-
+std::multimap<const uchar*, persistent_ptr<row> >& key::gettempRowsMap()
+{
+  return temprows;
+}
 bool key::deleteRow(rowItr currNode)
 {
+  if(transaction_started)
+  {
+    std::pair<const uchar*, persistent_ptr<row> > r(currNode->first,currNode->second);
+    temprows.insert(r);
+  }
   rows.erase(currNode);
   return true;
 }
@@ -1306,9 +1345,14 @@ bool key::updateRow(const uchar* oldValue, const uchar* newValue)
      if (memcmp(it->first, oldValue, sizeof(it->first))==0)
      {
        row_ = it->second;
-	   rows.erase(it);
-	   
-	   std::pair<const uchar*, persistent_ptr<row> > r(newValue, row_);
+       std::pair<const uchar*, persistent_ptr<row> > r(newValue, row_);
+       if(transaction_started)
+       {
+         std::pair<const uchar*, persistent_ptr<row> > itr(it->first,it->second);
+         temprows.insert(itr);
+         temprows.insert(r);
+       }
+       rows.erase(it);
        rows.insert(r);
        break;
      }
