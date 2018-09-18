@@ -307,6 +307,7 @@ public:
   void populate_errcodemap(void);
   void insertRowIntoIndexTable(Field *field, uchar *key_, persistent_ptr<row> row);
   int start_stmt(THD *thd, thr_lock_type lock_type);
+  int deleteNodeFromSLL();
 };
 
 typedef std::multimap<const uchar*, persistent_ptr<row> >::iterator rowItr;
@@ -325,7 +326,6 @@ class key
       rowItr getCurrent();
       rowItr getLast();
       bool verifyKey(const uchar* key);
-      bool verifyKey(const uchar* key, persistent_ptr<row> &iter, persistent_ptr<row> &current,persistent_ptr<row> &prev);
       bool isRowEmpty();
       void print();
    private:

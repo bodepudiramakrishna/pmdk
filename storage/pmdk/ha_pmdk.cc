@@ -562,9 +562,40 @@ int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
 int ha_pmdk::delete_row(const uchar *buf)
 {
   DBUG_ENTER("ha_pmdk::delete_row"); 
-  DBUG_PRINT("info", ("delete_row BUF :%s  Buf+1 :%s Buf+2 :%s",buf, buf+1, buf+2));
+  DBUG_PRINT("info", ("delete_row"));
 
-  persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
+  // If the number of indexed keys are zero then the table is not an index table.
+  if (table->s->keys == 0) {
+    deleteNodeFromSLL();
+  } else { //Index table
+    KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
+    database *db = database::getInstance();
+    table_ *tab;
+    key *k;
+    if (db->getTable(table->s->table_name.str, &tab)) {
+      if (tab->getKeys(key_part->field->field_name.str, &k)) {
+        rowItr currNode = k->getCurrent();
+        prev = NULL;
+        current = proot->rows;
+        while(current) {
+          if (current == currNode->second) {
+	    deleteNodeFromSLL();
+	    k->deleteRow(currNode);
+	    break;
+          }
+          prev = current;
+          current = current->next;
+        }
+      }
+    }
+  }
+  stats.records--;
+
+  DBUG_RETURN(0);
+}
+
+int ha_pmdk::deleteNodeFromSLL()
+{
   if (!prev) {
     if (!current->next) { 
 // When sll contains single node
@@ -575,10 +606,10 @@ int ha_pmdk::delete_row(const uchar *buf)
     } else { 
 // When deleting the first node of sll
       TX_BEGIN(objtab) {
-	delete_persistent<row>(current);
-	current = nullptr;
+        delete_persistent<row>(current);
+        proot->rows = current->next;
+        current = nullptr;
       } TX_END
-      proot->rows = iter;
     }
   } else {
     if (!current->next) { 
@@ -593,41 +624,6 @@ int ha_pmdk::delete_row(const uchar *buf)
       current = nullptr; 
     } TX_END
   }
-
-  /* TO BE HANDLDED THE KEY_PART_INFO as active_index will not be set of normal table */
-  KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
-
-  if (key_part->field->key_start.to_ulonglong() >= 1) {
-    database *db = database::getInstance();
-    table_ *tab;
-    key *k;
-    int rc = 0;
-
-    DBUG_PRINT("info", ("Deletion can happen This is a indexed field ---- "));
-    if (db->getTable(table->s->table_name.str, &tab)) {
-      if (tab->getKeys(key_part->field->field_name.str, &k)) {
-        rowItr currNode = k->getCurrent();	
-        bool retKey = k->deleteRow(currNode);
-       	if (k->isRowEmpty()) {
-       	  //If all the row are empty delete the Key Value associated with the Row
-	  bool retRow = tab->deleteKey(key_part->field->field_name.str);
-
-	  //If all the Keys are empty delete the table Value associated with the Row
-	  if (retRow ==1 && tab->isKeysEmpty()) {
-	    bool retTable = db->deleteTable(table->s->table_name.str);
-
-	     //If all the Tables are empty delete the databse in the index.
-	     if (retTable==1 && db->isTablesEmpty()){
-	       delete db;
-	       proot->rows = iter = current = prev = NULL;
-	     }
-	  }
-        }
-      }
-    }
-  }
-  stats.records--;
-  DBUG_RETURN(0);
 }
 
 /**
@@ -642,40 +638,28 @@ int ha_pmdk::index_read_map(uchar *buf, const uchar *key_,
                                enum ha_rkey_function find_flag
                                __attribute__((unused)))
 {
-  int rc;
+  int rc = 0;
   DBUG_ENTER("ha_pmdk::index_read");
-  DBUG_PRINT("info", ("index_read_map Entered"));
+  DBUG_PRINT("info", ("index_read_map"));
   uchar *key_buff;
 
   KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
-
   database *db = database::getInstance();
   table_ *tab;
   key *k;
 
-  if (iter == NULL)
-    DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-  if (db->getTable(table->s->table_name.str, &tab)) 
-  {
-     if (key_part->field->key_start.to_ulonglong() >= 1)
-     {
-       if (tab->getKeys(key_part->field->field_name.str, &k)) 
-       {
-	 if (k->verifyKey(key_+2, iter, current, prev))
-	 { 
-	    rowItr currNode = k->getCurrent();
-            memcpy(buf, currNode->second->buf, table->s->reclength);
-	 }
-         else
-           DBUG_RETURN(HA_ERR_END_OF_FILE);
-       }
-     } else
-       DBUG_RETURN(HA_ERR_END_OF_FILE);
+  if (db->getTable(table->s->table_name.str, &tab)) {
+    if (tab->getKeys(key_part->field->field_name.str, &k)) {
+      if (k->verifyKey(key_+2)) { 
+        rowItr currEle = k->getCurrent();
+        memcpy(buf, currEle->second->buf, table->s->reclength);
+      } else
+        rc = HA_ERR_END_OF_FILE;
+    }
   } else
-     DBUG_RETURN(HA_ERR_END_OF_FILE);
-  DBUG_PRINT("info", ("index_read_map End"));
-  DBUG_RETURN(0);
+    rc = HA_ERR_END_OF_FILE;
+
+  DBUG_RETURN(rc);
 }
 
 
@@ -694,25 +678,18 @@ int ha_pmdk::index_next(uchar *buf)
   key *k1;
   KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
   if (db->getTable(table->s->table_name.str, &tab)) {
-    if (key_part->field->key_start.to_ulonglong() >= 1)
-    {
-      if (tab->getKeys(key_part->field->field_name.str, &k1)) {
-        rowItr nextNode = k1->getNext();
-        if (nextNode == k1->getLast()) {
-          DBUG_RETURN(HA_ERR_END_OF_FILE);
-        }
-        memcpy(buf, nextNode->second->buf, table->s->reclength);
-	// Following three are useful only for the delete_row and update_row methods
-	prev = current;
-        current = iter;
-        iter = nextNode->second;
-      } else
-        rc = HA_ERR_END_OF_FILE;
+    if (tab->getKeys(key_part->field->field_name.str, &k1)) {
+      // Get the next element from index map	    
+      rowItr nextEle = k1->getNext();
+      if (nextEle == k1->getLast()) {
+        DBUG_RETURN(HA_ERR_END_OF_FILE);
+      }
+      memcpy(buf, nextEle->second->buf, table->s->reclength);
     } else
       rc = HA_ERR_END_OF_FILE;
-  } else {
-     rc = HA_ERR_END_OF_FILE;
-  }
+  } else
+    rc = HA_ERR_END_OF_FILE;
+
   DBUG_RETURN(rc);
 }
 
@@ -743,29 +720,26 @@ int ha_pmdk::index_prev(uchar *buf)
 */
 int ha_pmdk::index_first(uchar *buf)
 {
-  int rc=0;
   DBUG_ENTER("ha_pmdk::index_first");
   DBUG_PRINT("info", ("index_first"));
-  MYSQL_INDEX_READ_ROW_START(table_share->db.str, table_share->table_name.str);
-  KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
 
+  int rc=0;
+  KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
   database *db = database::getInstance();
   table_ *tab;
   key *k1;
   if (db->getTable(table->s->table_name.str, &tab)) {
-     if (key_part->field->key_start.to_ulonglong() >= 1)
-     {
-       if (tab->getKeys(key_part->field->field_name.str, &k1)) {
-         rowItr it = k1->getFirst();
-         k1->setMapPosition(it);
-         memcpy(buf, it->second->buf, table->s->reclength);
-	 current = iter;
-	 iter = current->next;
+    if (tab->getKeys(key_part->field->field_name.str, &k1)) {
+      rowItr it = k1->getFirst();
+      if (it == k1->getLast()) {
+        DBUG_RETURN(HA_ERR_END_OF_FILE);
       }
-    } else 
-       rc = HA_ERR_END_OF_FILE;
+      k1->setMapPosition(it);
+      memcpy(buf, it->second->buf, table->s->reclength);
+    }
   } else 
-       rc = HA_ERR_END_OF_FILE;
+    rc = HA_ERR_END_OF_FILE;
+
   DBUG_RETURN(rc);
 }
 
@@ -808,6 +782,7 @@ int ha_pmdk::index_end()
   DBUG_ENTER("index_end");
   DBUG_PRINT("info", ("index_end"));
   active_index = MAX_KEY;
+  iter=current=prev=NULL;
   DBUG_RETURN(0);
 }
 
@@ -834,8 +809,9 @@ int ha_pmdk::rnd_init(bool scan)
 {
   DBUG_ENTER("ha_pmdk::rnd_init");
   DBUG_PRINT("info", ("rnd_init"));
-  proot = pmemobj_root(objtab, sizeof (root));
+
   current=prev=NULL;
+  proot = pmemobj_root(objtab, sizeof (root));
   iter = proot->rows;
   DBUG_RETURN(0);
 }
@@ -844,8 +820,7 @@ int ha_pmdk::rnd_end()
 {
   DBUG_ENTER("ha_pmdk::rnd_end");
   DBUG_PRINT("info", ("rnd_end"));
-  iter = NULL;
-  current = NULL;
+  iter = current = NULL;
   DBUG_RETURN(0);
 }
 
@@ -1303,35 +1278,12 @@ bool key::verifyKey(const uchar* key)
 {
    bool ret = false;
    for (auto it = rows.begin(); it != rows.end(); ++it) {
-     if (sizeof(it->first)==sizeof(key) && memcmp(it->first, key, sizeof(it->first))==0)
+     if (strlen((const char*)it->first)==strlen((const char*)key) && memcmp(it->first, key, strlen((const char*)it->first))==0)
      {
        mapPosition = it;
        ret = true;
        break;
      }
-   }
-   return ret;
-}
-
-bool key::verifyKey(const uchar* key, persistent_ptr<row> &iter, persistent_ptr<row> &current,persistent_ptr<row> &prev)
-{
-   bool ret = false;
-   for (auto it = rows.begin(); it != rows.end(); ++it) {
-     if (sizeof(it->first)==sizeof((const char*)key) && memcmp(it->first, key, sizeof(it->first))==0)
-     {
-       mapPosition = it;
-       ret = true;
-     }
-     if (current == NULL) {
-	current = it->second;
-        iter = current->next;
-     } else {
-	prev = current;
-	current = iter;
-        iter = it->second;
-     }
-     if (ret == true)
-       break;
    }
    return ret;
 }
