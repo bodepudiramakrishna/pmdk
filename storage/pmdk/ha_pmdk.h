@@ -308,6 +308,7 @@ public:
   void insertRowIntoIndexTable(Field *field, uchar *key_, persistent_ptr<row> row);
   int start_stmt(THD *thd, thr_lock_type lock_type);
   int deleteNodeFromSLL();
+  bool searchNode(const persistent_ptr<row> &rowPtr);
 };
 
 typedef std::multimap<const uchar*, persistent_ptr<row> >::iterator rowItr;
@@ -316,7 +317,7 @@ class key
 {
    public:
       int insert(const uchar* keyValue, persistent_ptr<row> row);
-      bool updateRow(const uchar* oldKeyValue, const uchar* newKeyValue);
+      bool updateRow(rowItr matchingEleIt, const uchar* oldKeyValue, const uchar* newKeyValue);
       bool deleteRow(rowItr currNode);
       std::multimap<const uchar*, persistent_ptr<row> >& getRowsMap();
       std::multimap<const uchar*, persistent_ptr<row> >& gettempRowsMap();

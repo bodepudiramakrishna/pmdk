@@ -359,13 +359,11 @@ void ha_pmdk::insertRowIntoIndexTable(Field *field, uchar *key_, persistent_ptr<
   table_ *tab;
   key *k;
   if (db->getTable(table->s->table_name.str, &tab)) {
-    //if (tab->getKeys((*field)->field_name.str, &k)) {
     if (tab->getKeys(field->field_name.str, &k)) {
       k->insert(key_+1, row);
      } else {
        key *keyPtr = new key;
        keyPtr->insert(key_+1, row);
-       //tab->insert((*field)->field_name.str, keyPtr);
        tab->insert(field->field_name.str, keyPtr);
     }
   } else {
@@ -475,7 +473,6 @@ int ha_pmdk::write_row(uchar *buf)
   } TX_END
   stats.records++;
 
-  
   for (Field **field = table->field; *field; field++)
   {
      if ((*field)->key_start.to_ulonglong() >= 1)
@@ -512,30 +509,41 @@ int ha_pmdk::write_row(uchar *buf)
 */
 int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
 {
-  database *db = database::getInstance();
-  table_ *tab;
-  key *k;
-  //TODO Update the Persistent Memory
   DBUG_ENTER("ha_pmdk::update_row");
-
-  TX_BEGIN(objtab) {
-    TX_MEMCPY(current->buf, new_data, table->s->reclength);
-  } TX_END
-
-  //If the table is an indexed table then update the index_HA_ERR_END_OF_FILE
-    Field **field = table->field;
-    if ((*field)->key_start.to_ulonglong() == 1) {
- 	DBUG_PRINT("info", ("Updation in a indexed field ---- "));
-       if (db->getTable(table->s->table_name.str, &tab)) {
-           if (tab->getKeys((*field)->field_name.str, &k)) {		
-			bool retKey = k->updateRow(old_data,new_data);
-			if(retKey){
-				DBUG_PRINT("info", ("*Updation successful in Index also :%d ",retKey));
-       	      } 
-       	    }
-       	 } 
- 	  } 
+  if (table->s->keys == 0) {
+    memcpy(current->buf, new_data, table->s->reclength);
+  } else { //Index table
+    KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
+    database *db = database::getInstance();
+    table_ *tab;
+    key *k;
+    if (db->getTable(table->s->table_name.str, &tab)) {
+      if (tab->getKeys(key_part->field->field_name.str, &k)) {
+        rowItr currNode = k->getCurrent();
+	if (searchNode(currNode->second)) {
+          memcpy(current->buf, new_data, table->s->reclength);
+          k->updateRow(currNode, old_data, new_data);
+        }
+      }
+    }
+  }
   DBUG_RETURN(0);
+}
+
+bool ha_pmdk::searchNode(const persistent_ptr<row> &rowPtr)
+{
+  bool ret = false;
+  prev = NULL;
+  current = proot->rows;
+  while(current) {
+    if (current == rowPtr) {
+      ret = true;
+      break;
+    }
+    prev = current;
+    current = current->next;
+  }
+  return ret;
 }
 
 
@@ -575,17 +583,11 @@ int ha_pmdk::delete_row(const uchar *buf)
     if (db->getTable(table->s->table_name.str, &tab)) {
       if (tab->getKeys(key_part->field->field_name.str, &k)) {
         rowItr currNode = k->getCurrent();
-        prev = NULL;
-        current = proot->rows;
-        while(current) {
-          if (current == currNode->second) {
-	    deleteNodeFromSLL();
-	    k->deleteRow(currNode);
-	    break;
-          }
-          prev = current;
-          current = current->next;
-        }
+	if (searchNode(currNode->second))
+	{
+	  deleteNodeFromSLL();
+	  k->deleteRow(currNode);
+	}
       }
     }
   }
@@ -1189,7 +1191,6 @@ bool key::isRowEmpty()
    bool ret = false;
    if (rows.empty()) {
       ret = true;
-      
    }
    return ret;
 }
@@ -1198,7 +1199,6 @@ bool table_::isKeysEmpty()
 {
    bool ret = false;
    if (keys.empty()) {
-  
       ret = true;
    }
    return ret;
@@ -1223,13 +1223,15 @@ std::multimap<const uchar*, persistent_ptr<row> >& key::getRowsMap()
 {
   return rows;
 }
+
 std::multimap<const uchar*, persistent_ptr<row> >& key::gettempRowsMap()
 {
   return temprows;
 }
+
 bool key::deleteRow(rowItr currNode)
 {
-  if(transaction_started)
+  if (transaction_started)
   {
     std::pair<const uchar*, persistent_ptr<row> > r(currNode->first,currNode->second);
     temprows.insert(r);
@@ -1248,6 +1250,7 @@ void key::setMapPosition(std::multimap<const uchar*, persistent_ptr<row> >::iter
 {
   mapPosition = iter;
 }
+
 std::multimap<const uchar*, persistent_ptr<row> >::iterator key::getFirst()
 {
   return rows.begin();
@@ -1278,8 +1281,8 @@ bool key::verifyKey(const uchar* key)
 {
    bool ret = false;
    for (auto it = rows.begin(); it != rows.end(); ++it) {
-     if (strlen((const char*)it->first)==strlen((const char*)key) && memcmp(it->first, key, strlen((const char*)it->first))==0)
-     {
+     if ((strlen((const char*)it->first))==strlen((const char*)key) && 
+	     memcmp(it->first, key, strlen((const char*)it->first))==0) {
        mapPosition = it;
        ret = true;
        break;
@@ -1288,37 +1291,32 @@ bool key::verifyKey(const uchar* key)
    return ret;
 }
 
-bool key::updateRow(const uchar* oldValue, const uchar* newValue)
+bool key::updateRow(rowItr matchingEleIt, const uchar* oldValue, const uchar* newValue)
 {
    persistent_ptr<row> row_;
    bool ret = false;
-   for (auto it = rows.begin(); it != rows.end(); ++it) {
-
-     if (memcmp(it->first, oldValue, sizeof(it->first))==0)
+   if (memcmp(matchingEleIt->first, oldValue, sizeof(matchingEleIt->first))==0)
+   {
+     row_ = matchingEleIt->second;
+     std::pair<const uchar*, persistent_ptr<row> > r(newValue, row_);
+     if (transaction_started)
      {
-       row_ = it->second;
-       std::pair<const uchar*, persistent_ptr<row> > r(newValue, row_);
-       if(transaction_started)
-       {
-         std::pair<const uchar*, persistent_ptr<row> > itr(it->first,it->second);
-         temprows.insert(itr);
-         temprows.insert(r);
-       }
-       rows.erase(it);
-       rows.insert(r);
-       break;
+       std::pair<const uchar*, persistent_ptr<row> > itr(matchingEleIt->first, matchingEleIt->second);
+       temprows.insert(itr);
+       temprows.insert(r);
      }
+     rows.erase(matchingEleIt);
+     rows.insert(r);
+     ret = true;
    }
    return ret;
 }
 
 bool database::deleteTable(const char* TableName)
 {
-
    bool ret = false;
    delete(tables[TableName]);
    if (tables.erase(TableName)){
-
      ret = true;
    }
    return ret;
@@ -1327,11 +1325,9 @@ bool database::deleteTable(const char* TableName)
 
 bool table_::deleteKey(const char* columnName)
 {
-
    bool ret = false;
    delete(keys[columnName]);
    if (keys.erase(columnName)){
-
      ret = true;
    }
    return ret;
