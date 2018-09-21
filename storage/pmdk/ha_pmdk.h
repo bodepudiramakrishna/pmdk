@@ -46,6 +46,9 @@
 #include <libpmemobj++/make_persistent.hpp>
 #include <map>
 #include <unordered_map>
+#include <string>
+#include <stdio.h>
+#include <stdlib.h>
 
 
 using namespace pmem::obj;
@@ -305,33 +308,34 @@ public:
   THR_LOCK_DATA **store_lock(THD *thd, THR_LOCK_DATA **to,
                              enum thr_lock_type lock_type);     ///< required
   void populate_errcodemap(void);
-  void insertRowIntoIndexTable(Field *field, uchar *key_, persistent_ptr<row> row);
+  void insertRowIntoIndexTable(Field *field, std::string key_, persistent_ptr<row> row);
   int start_stmt(THD *thd, thr_lock_type lock_type);
   int deleteNodeFromSLL();
   bool searchNode(const persistent_ptr<row> &rowPtr);
+  std::string IdentifyTypeAndConvertToString(const uchar*, int, int offset=0);
 };
 
-typedef std::multimap<const uchar*, persistent_ptr<row> >::iterator rowItr;
+typedef std::multimap<const std::string, persistent_ptr<row> >::iterator rowItr;
 
 class key
 {
    public:
-      int insert(const uchar* keyValue, persistent_ptr<row> row);
+      int insert(const std::string keyValue, persistent_ptr<row> row);
       bool updateRow(rowItr matchingEleIt, const uchar* oldKeyValue, const uchar* newKeyValue);
       bool deleteRow(rowItr currNode);
-      std::multimap<const uchar*, persistent_ptr<row> >& getRowsMap();
-      std::multimap<const uchar*, persistent_ptr<row> >& gettempRowsMap();
+      std::multimap<const std::string, persistent_ptr<row> >& getRowsMap();
+      std::multimap<const std::string, persistent_ptr<row> >& gettempRowsMap();
       void setMapPosition(rowItr iter);
       rowItr getFirst();
       rowItr getNext();
       rowItr getCurrent();
       rowItr getLast();
-      bool verifyKey(const uchar* key);
+      bool verifyKey(const std::string key);
       bool isRowEmpty();
       void print();
    private:
-      std::multimap<const uchar*, persistent_ptr<row> > rows;
-      std::multimap<const uchar*, persistent_ptr<row> > temprows;
+      std::multimap<const std::string, persistent_ptr<row> > rows;
+      std::multimap<const std::string, persistent_ptr<row> > temprows;
       rowItr mapPosition;
 };
 
