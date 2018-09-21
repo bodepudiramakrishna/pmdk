@@ -312,7 +312,7 @@ public:
   int start_stmt(THD *thd, thr_lock_type lock_type);
   int deleteNodeFromSLL();
   bool searchNode(const persistent_ptr<row> &rowPtr);
-  std::string IdentifyTypeAndConvertToString(const uchar*, int, int offset=0);
+  std::string IdentifyTypeAndConvertToString(const uchar*, int,int len=0,int offset=0);
 };
 
 typedef std::multimap<const std::string, persistent_ptr<row> >::iterator rowItr;

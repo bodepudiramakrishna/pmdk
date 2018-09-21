@@ -330,13 +330,15 @@ int ha_pmdk::open(const char *name, int mode, uint test_if_locked)
          memcpy(key_,row->buf+ix, (*field)->key_length());
          if ((*field)->type() == 3) { // If the column is INT
 	   if ((*field)->key_start.to_ulonglong() >= 1) { 
-	     std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type());
+	     std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(),(*field)->key_length());
+	     //insertRowIntoIndexTable(*field, key_, row);
 	     insertRowIntoIndexTable(*field, convertedKey, row);
 	   }
            ix +=4;
 	 } else { // If the column is VARCHAR
 	   if ((*field)->key_start.to_ulonglong() >= 1) {
-	     std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(), 1);
+	     std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(),(*field)->key_length(),1);
+	     //insertRowIntoIndexTable(*field, key_, row);
 	     insertRowIntoIndexTable(*field, convertedKey, row);
 	   }
 	   ix += (*field)->field_length;
@@ -447,7 +449,7 @@ int ha_pmdk::write_row(uchar *buf)
        Field *field = key_info->key_part->field;
        key_ = (uchar *)my_malloc(field->field_length, MYF(MY_ZEROFILL | MY_WME));
        memcpy(key_, field->ptr, field->key_length()); 
-       std::string convertedKey = IdentifyTypeAndConvertToString(key_, field->type(), 1);
+       std::string convertedKey = IdentifyTypeAndConvertToString(key_, field->type(),field->key_length(),1);
        if (db->getTable(table->s->table_name.str, &tab)) {
           if (tab->getKeys(field->field_name.str, &k)) {
 	     if (k->verifyKey(convertedKey)) {
@@ -469,12 +471,13 @@ int ha_pmdk::write_row(uchar *buf)
 	  err = errno;
   } TX_END
   stats.records++;
-
-  for (Field **field = table->field; *field; field++) {
-     if ((*field)->key_start.to_ulonglong() >= 1) {
+  for (Field **field = table->field; *field; field++)
+  {
+     if ((*field)->key_start.to_ulonglong() >= 1)
+     {
        key_ = (uchar *)my_malloc((*field)->field_length, MYF(MY_ZEROFILL | MY_WME));
        memcpy(key_, (*field)->ptr, (*field)->key_length());
-       std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(), 1);
+       std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(),(*field)->key_length(),1);
        insertRowIntoIndexTable(*field, convertedKey, row);
      }
    }
@@ -482,17 +485,21 @@ int ha_pmdk::write_row(uchar *buf)
    DBUG_RETURN(err);
 }
 
-std::string ha_pmdk::IdentifyTypeAndConvertToString(const uchar* key, int type, int offset)
+std::string ha_pmdk::IdentifyTypeAndConvertToString(const uchar* key, int type,int len,int offset)
 {
   std::string key_ = "";
-  if (type == 3) {
-    int val = 0;
-    memcpy(&val, key, 4);
-    key_ = std::string(std::to_string(val));
-  } else if (type == 15) {
-    for (int i=offset; i<strlen((const char*)(key+offset))+offset; ++i) {
+  if(type == 15)
+  {  
+    len = key[0] + offset;
+    for (int i=offset; i<len; ++i) {
       key_.push_back(key[i]);
     }
+  }
+  else
+  {
+    int64 val = 0;
+    memcpy(&val, key,len);
+    key_ = std::string(std::to_string(val));
   }
   return key_;
 }
@@ -663,7 +670,8 @@ int ha_pmdk::index_read_map(uchar *buf, const uchar *key_,
 
   if (db->getTable(table->s->table_name.str, &tab)) {
     if (tab->getKeys(key_part->field->field_name.str, &k)) {
-      std::string convertedKey = IdentifyTypeAndConvertToString(key_, key_part->field->type(), 2);
+      std::string convertedKey = IdentifyTypeAndConvertToString(key_, key_part->field->type(),key_part->field->key_length(),2);
+      //if (k->verifyKey(key_+2)) { 
       if (k->verifyKey(convertedKey)) { 
         rowItr currEle = k->getCurrent();
         memcpy(buf, currEle->second->buf, table->s->reclength);
