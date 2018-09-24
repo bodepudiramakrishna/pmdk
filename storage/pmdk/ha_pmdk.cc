@@ -328,21 +328,22 @@ int ha_pmdk::open(const char *name, int mode, uint test_if_locked)
        uchar *key_ = (uchar *)my_malloc((*field)->field_length, MYF(MY_ZEROFILL | MY_WME));
        if (key_) {
          memcpy(key_,row->buf+ix, (*field)->key_length());
-         if ((*field)->type() == 3) { // If the column is INT
-	   if ((*field)->key_start.to_ulonglong() >= 1) { 
+         if ((*field)->key_start.to_ulonglong() >= 1) {  
+           if ((*field)->type() == 15) { // If the column is VARCHAR
+             std::string convertedKey;
+	     if(key_[0])
+               convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(),(*field)->key_length(),1);
+	     else 
+	       convertedKey = IdentifyTypeAndConvertToString(key_+1, (*field)->type(),(*field)->key_length(),1);
+	     insertRowIntoIndexTable(*field, convertedKey, row);
+	   }
+	   else
+	   {
 	     std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(),(*field)->key_length());
-	     //insertRowIntoIndexTable(*field, key_, row);
 	     insertRowIntoIndexTable(*field, convertedKey, row);
 	   }
-           ix +=4;
-	 } else { // If the column is VARCHAR
-	   if ((*field)->key_start.to_ulonglong() >= 1) {
-	     std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(),(*field)->key_length(),1);
-	     //insertRowIntoIndexTable(*field, key_, row);
-	     insertRowIntoIndexTable(*field, convertedKey, row);
-	   }
-	   ix += (*field)->field_length;
          }
+         ix += (*field)->key_length();   
        }
     }
     row = row->next;
