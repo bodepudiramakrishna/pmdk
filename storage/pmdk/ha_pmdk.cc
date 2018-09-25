@@ -161,15 +161,13 @@ int ha_pmdk::start_stmt(THD *thd, thr_lock_type lock_type)
 {
   DBUG_ENTER("ha_pmdk::start_stmt");
   DBUG_PRINT("info", ("start_stmt"));
-  if (lock_type != F_UNLCK)
+  
+  trans_register_ha(thd,FALSE,ht);
+  if (!transaction_started && thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN))
   {
-    trans_register_ha(thd,FALSE,ht);
-    if (!transaction_started && thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN))
-    {
-      trans_register_ha(thd,TRUE,ht);
-      DBUG_PRINT("info", ("pmemobj_tx_begin %d ",pmemobj_tx_begin(objtab,NULL,TX_PARAM_NONE)));
-      transaction_started = 1;
-    }
+    trans_register_ha(thd,TRUE,ht);
+    DBUG_PRINT("info", ("pmemobj_tx_begin %d ",pmemobj_tx_begin(objtab,NULL,TX_PARAM_NONE)));
+    transaction_started = 1;
   }
   DBUG_RETURN(0);
 }
@@ -322,29 +320,24 @@ int ha_pmdk::open(const char *name, int mode, uint test_if_locked)
   persistent_ptr<row> row = proot->rows;
   while(row)
   {
-    int ix = 1;
+    int ix = 0;
     for (Field **field = table->field; *field; field++)
     {
-       uchar *key_ = (uchar *)my_malloc((*field)->field_length, MYF(MY_ZEROFILL | MY_WME));
-       if (key_) {
-         memcpy(key_,row->buf+ix, (*field)->key_length());
-         if ((*field)->key_start.to_ulonglong() >= 1) {  
-           if ((*field)->type() == 15) { // If the column is VARCHAR
-             std::string convertedKey;
-	     if(key_[0])
-               convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(),(*field)->key_length(),1);
-	     else 
-	       convertedKey = IdentifyTypeAndConvertToString(key_+1, (*field)->type(),(*field)->key_length(),1);
-	     insertRowIntoIndexTable(*field, convertedKey, row);
-	   }
-	   else
-	   {
-	     std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(),(*field)->key_length());
-	     insertRowIntoIndexTable(*field, convertedKey, row);
-	   }
-         }
-         ix += (*field)->key_length();   
-       }
+      uchar *key_ = (uchar *)my_malloc((*field)->field_length, MYF(MY_ZEROFILL | MY_WME));
+      if (key_) {
+	if (ix == 0 && (*field)->key_start.to_ulonglong() == 0) // if first columns is non index 
+	  ix+=1;
+        if ((*field)->type() == 15) // If the column is VARCHAR
+          ix += 1; 
+        if ((*field)->key_start.to_ulonglong() > 0) { // for index column
+          if ((*field)->type() != 15) // If the column is NOT VARCHAR
+            ix += 1; 
+          memcpy(key_,row->buf+ix, (*field)->key_length());
+	  std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(),(*field)->key_length());
+	  insertRowIntoIndexTable(*field, convertedKey, row);
+        }
+        ix += (*field)->key_length();   
+      }
     }
     row = row->next;
   }
