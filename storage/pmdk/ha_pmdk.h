@@ -321,7 +321,7 @@ class key
 {
    public:
       int insert(const std::string keyValue, persistent_ptr<row> row);
-      bool updateRow(rowItr matchingEleIt, const uchar* oldKeyValue, const uchar* newKeyValue);
+      bool updateRow(rowItr matchingEleIt, const std::string oldStr, const std::string newStr);
       bool deleteRow(rowItr currNode);
       std::multimap<const std::string, persistent_ptr<row> >& getRowsMap();
       std::multimap<const std::string, persistent_ptr<row> >& gettempRowsMap();

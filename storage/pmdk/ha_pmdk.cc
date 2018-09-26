@@ -330,7 +330,7 @@ int ha_pmdk::open(const char *name, int mode, uint test_if_locked)
         if ((*field)->type() == 15) // If the column is VARCHAR
           ix += 1; 
         if ((*field)->key_start.to_ulonglong() > 0) { // for index column
-          if (ix == 0 && (*field)->type() != 15) // If the column is NOT VARCHAR
+          if (ix == 0 && (*field)->type() != 15) // If the first column is NOT VARCHAR
             ix += 1; 
           memcpy(key_,row->buf+ix, (*field)->key_length());
 	  std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(),(*field)->key_length());
@@ -522,19 +522,23 @@ std::string ha_pmdk::IdentifyTypeAndConvertToString(const uchar* key, int type,i
 int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
 {
   DBUG_ENTER("ha_pmdk::update_row");
-  if (table->s->keys == 0) {
+  DBUG_PRINT("info", ("update_row active_index : %d ",active_index));
+  if (active_index == 64) {
     memcpy(current->buf, new_data, table->s->reclength);
   } else { //Index table
     KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
     database *db = database::getInstance();
     table_ *tab;
     key *k;
+    std::string convertedOldData = IdentifyTypeAndConvertToString(old_data+1, key_part->field->type(),key_part->field->key_length(),1);
+    std::string convertedNewData = IdentifyTypeAndConvertToString(new_data+1, key_part->field->type(),key_part->field->key_length(),1);
     if (db->getTable(table->s->table_name.str, &tab)) {
       if (tab->getKeys(key_part->field->field_name.str, &k)) {
         rowItr currNode = k->getCurrent();
-	if (searchNode(currNode->second)) {
+	rowItr prevNode = std::prev(currNode);
+	if (searchNode(prevNode->second)) {
           memcpy(current->buf, new_data, table->s->reclength);
-          k->updateRow(currNode, old_data, new_data);
+          k->updateRow(prevNode, convertedOldData, convertedNewData);
         }
       }
     }
@@ -582,10 +586,10 @@ bool ha_pmdk::searchNode(const persistent_ptr<row> &rowPtr)
 int ha_pmdk::delete_row(const uchar *buf)
 {
   DBUG_ENTER("ha_pmdk::delete_row"); 
-  DBUG_PRINT("info", ("delete_row"));
+  DBUG_PRINT("info", ("delete_row active_index : %d ",active_index));
 
   // If the number of indexed keys are zero then the table is not an index table.
-  if (table->s->keys == 0) {
+  if (active_index == 64) {
     deleteNodeFromSLL();
   } else { //Index table
     KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
@@ -1310,15 +1314,11 @@ bool key::verifyKey(const std::string key)
    return ret;
 }
 
-bool key::updateRow(rowItr matchingEleIt, const uchar* oldValue, const uchar* newValue)
+//bool key::updateRow(rowItr matchingEleIt, const uchar* oldValue, const uchar* newValue)
+bool key::updateRow(rowItr matchingEleIt, const std::string oldStr, const std::string newStr)
 {
    persistent_ptr<row> row_;
    bool ret = false;
-   std::string oldStr, newStr;
-   for (int i=0; i<strlen((const char*)oldValue); ++i)
-     oldStr.push_back(oldValue[i+1]);
-   for (int i=0; i<strlen((const char*)newValue); ++i)
-     newStr.push_back(newValue[i+1]);
 
    if (matchingEleIt->first == oldStr) {
      row_ = matchingEleIt->second;
