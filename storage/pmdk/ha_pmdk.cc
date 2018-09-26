@@ -330,7 +330,7 @@ int ha_pmdk::open(const char *name, int mode, uint test_if_locked)
         if ((*field)->type() == 15) // If the column is VARCHAR
           ix += 1; 
         if ((*field)->key_start.to_ulonglong() > 0) { // for index column
-          if ((*field)->type() != 15) // If the column is NOT VARCHAR
+          if (ix == 0 && (*field)->type() != 15) // If the column is NOT VARCHAR
             ix += 1; 
           memcpy(key_,row->buf+ix, (*field)->key_length());
 	  std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(),(*field)->key_length());
@@ -664,8 +664,13 @@ int ha_pmdk::index_read_map(uchar *buf, const uchar *key_,
 
   if (db->getTable(table->s->table_name.str, &tab)) {
     if (tab->getKeys(key_part->field->field_name.str, &k)) {
-      std::string convertedKey = IdentifyTypeAndConvertToString(key_, key_part->field->type(),key_part->field->key_length(),2);
-      //if (k->verifyKey(key_+2)) { 
+      std::string convertedKey;
+      if (key_part->field->type() == 15)   // If the column is VARCHAR
+        convertedKey = IdentifyTypeAndConvertToString(key_, key_part->field->type(), key_part->field->key_length(), 2);
+      else
+        convertedKey = IdentifyTypeAndConvertToString(key_, key_part->field->type(), key_part->field->key_length());
+      std::cout<<"convertedKey ->"<<convertedKey<<std::endl;
+
       if (k->verifyKey(convertedKey)) { 
         rowItr currEle = k->getCurrent();
         memcpy(buf, currEle->second->buf, table->s->reclength);
@@ -1294,7 +1299,6 @@ std::multimap<const std::string, persistent_ptr<row> >::iterator key::getLast()
 Function to verify the Key Value
 */
 
-//bool key::verifyKey(const uchar* key)
 bool key::verifyKey(const std::string key)
 {
    bool ret = false;
