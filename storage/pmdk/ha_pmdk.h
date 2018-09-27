@@ -58,6 +58,8 @@ POBJ_LAYOUT_TOID(mysql_obj, struct table_row);
 POBJ_LAYOUT_TOID(mysql_obj, struct row);
 POBJ_LAYOUT_END(mysql_obj);
 
+typedef std::multimap<const std::string, persistent_ptr<row> >::iterator rowItr;
+
 struct table_row {
     uchar buf[PMEMOBJ_MIN_POOL];
 };
@@ -313,16 +315,16 @@ public:
   int deleteNodeFromSLL();
   bool searchNode(const persistent_ptr<row> &rowPtr);
   std::string IdentifyTypeAndConvertToString(const uchar*, int,int len=0,int offset=0);
+  void deleteRowFromAllIndexedColumns(const persistent_ptr<row> &row);
 };
 
-typedef std::multimap<const std::string, persistent_ptr<row> >::iterator rowItr;
 
 class key
 {
    public:
       int insert(const std::string keyValue, persistent_ptr<row> row);
       bool updateRow(rowItr matchingEleIt, const std::string oldStr, const std::string newStr);
-      bool deleteRow(rowItr currNode);
+      void deleteRow(const persistent_ptr<row> &row);
       std::multimap<const std::string, persistent_ptr<row> >& getRowsMap();
       std::multimap<const std::string, persistent_ptr<row> >& gettempRowsMap();
       void setMapPosition(rowItr iter);
@@ -332,7 +334,6 @@ class key
       rowItr getLast();
       bool verifyKey(const std::string key);
       bool isRowEmpty();
-      void print();
    private:
       std::multimap<const std::string, persistent_ptr<row> > rows;
       std::multimap<const std::string, persistent_ptr<row> > temprows;

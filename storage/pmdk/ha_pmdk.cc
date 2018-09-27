@@ -588,21 +588,32 @@ int ha_pmdk::delete_row(const uchar *buf)
   DBUG_ENTER("ha_pmdk::delete_row"); 
   DBUG_PRINT("info", ("delete_row active_index : %d ",active_index));
 
-  // If the number of indexed keys are zero then the table is not an index table.
-  if (active_index == 64) {
-    deleteNodeFromSLL();
-  } else { //Index table
-    KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
+  // active_index == 64  ---> Non indexed field.
+  // table->s->keys == 0 ---> Non indexed table
+
+  // Delete the field from non indexed table
+  if (active_index == 64 && table->s->keys ==0 ) {
+    if (current)
+      deleteNodeFromSLL();
+  } else if (active_index == 64 && table->s->keys !=0 ) { // Delete non indexed column field from indexed table
+    if (current) {
+      deleteRowFromAllIndexedColumns(current);
+      deleteNodeFromSLL();
+    }
+  } else { // Delete indexed column field from indexed table
     database *db = database::getInstance();
     table_ *tab;
     key *k;
+    KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
     if (db->getTable(table->s->table_name.str, &tab)) {
       if (tab->getKeys(key_part->field->field_name.str, &k)) {
         rowItr currNode = k->getCurrent();
 	rowItr prevNode = std::prev(currNode);
 	if (searchNode(prevNode->second)) {
-	  deleteNodeFromSLL();
-	  k->deleteRow(prevNode);
+	  if (prevNode->second) {
+	    deleteRowFromAllIndexedColumns(prevNode->second);
+            deleteNodeFromSLL();
+	  }
 	}
       }
     }
@@ -610,6 +621,23 @@ int ha_pmdk::delete_row(const uchar *buf)
   stats.records--;
 
   DBUG_RETURN(0);
+}
+
+void ha_pmdk::deleteRowFromAllIndexedColumns(const persistent_ptr<row> &row)
+{
+  database *db = database::getInstance();
+  table_ *tab;
+  key *k;
+
+  for (int i= 0; i < table->s->keys; ++i) {
+    KEY* key_info = &table->key_info[i];
+    Field *field = key_info->key_part->field;
+    if (db->getTable(table->s->table_name.str, &tab)) {
+      if (tab->getKeys(field->field_name.str, &k)) {
+        k->deleteRow(row);
+      }
+    }
+  }
 }
 
 int ha_pmdk::deleteNodeFromSLL()
@@ -1255,15 +1283,18 @@ std::multimap<const std::string, persistent_ptr<row> >& key::gettempRowsMap()
   return temprows;
 }
 
-bool key::deleteRow(rowItr currNode)
+void key::deleteRow(const persistent_ptr<row> &row_)
 {
-  if (transaction_started)
-  {
-    std::pair<const std::string, persistent_ptr<row> > r(currNode->first, currNode->second);
-    temprows.insert(r);
+  for (auto it = rows.begin(); it != rows.end(); ++it) {
+    if (it->second == row_) {
+      if (transaction_started) {
+        std::pair<const std::string, persistent_ptr<row> > r(it->first, it->second);
+        temprows.insert(r);
+      }
+      rows.erase(it);
+      break;
+    }
   }
-  rows.erase(currNode);
-  return true;
 }
 
 
@@ -1314,7 +1345,6 @@ bool key::verifyKey(const std::string key)
    return ret;
 }
 
-//bool key::updateRow(rowItr matchingEleIt, const uchar* oldValue, const uchar* newValue)
 bool key::updateRow(rowItr matchingEleIt, const std::string oldStr, const std::string newStr)
 {
    persistent_ptr<row> row_;
