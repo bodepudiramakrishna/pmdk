@@ -111,6 +111,7 @@
 #define MAX_PATH_LEN 255
 
 database* database::m_db=NULL;
+std::string table_name="";
 
 
 static handler *pmdk_create_handler(handlerton *hton,
@@ -182,26 +183,9 @@ static int pmdk_rollback(handlerton* hton,THD* thd,bool rollback_trx)
     transaction_started = 0;
 
     database *db = database::getInstance();
-    for (auto& table : db->getTablesMap())
-    {
-      for (auto& key : table.second->getKeysMap()) {
-        for (auto& temptable : key.second->gettempRowsMap()) {
-          for (auto& table : key.second->getRowsMap()) {
-            if(temptable.second == table.second) {
-              key.second->getRowsMap().erase(table.first);
-              key.second->gettempRowsMap().erase(temptable.first);
-            }
-          }
-        }
-        for (auto& temptable : key.second->gettempRowsMap()) {
-          auto& table = key.second->getRowsMap();
-          std::pair<const std::string, persistent_ptr<row> > r(temptable.first,temptable.second);
-	  table.insert(r);
-          key.second->gettempRowsMap().erase(temptable.first);
-	}
-      }
-    }    
-
+    table_ *tab;
+    if (db->getTable(table_name.c_str(), &tab))
+      tab->checkColumnsForRollBack(); 
   }
   DBUG_RETURN(0);
 }
@@ -214,6 +198,10 @@ static int pmdk_commit(handlerton* hton,THD *thd,bool commit_trx)
     pmemobj_tx_commit();
     pmemobj_tx_end();
     transaction_started = 0;
+    database *db = database::getInstance();
+    table_ *tab;
+    if (db->getTable(table_name.c_str(), &tab))
+      tab->clearTransactionTempData();
   }
   DBUG_RETURN(0);
 }
@@ -1078,6 +1066,20 @@ int ha_pmdk::external_lock(THD *thd, int lock_type)
       trans_register_ha(thd,TRUE,ht);
       DBUG_PRINT("info", ("pmemobj_tx_begin %d ",pmemobj_tx_begin(objtab,NULL,TX_PARAM_NONE)));
       transaction_started = 1;
+
+      database *db = database::getInstance();
+      table_ *tab;
+      key *k;
+      for (int i= 0; i < table->s->keys; ++i) {
+        KEY* key_info = &table->key_info[i];
+        Field *field = key_info->key_part->field;
+        if (db->getTable(table->s->table_name.str, &tab)) {
+          if (tab->getKeys(field->field_name.str, &k)) {
+            k->backupForRollBack();
+	    table_name = table->s->table_name.str;
+          }
+        }
+      }
     }
   }
   DBUG_RETURN(0);
@@ -1234,8 +1236,6 @@ int key::insert(const std::string keyValue, persistent_ptr<row> row_1)
 
   std::pair<const std::string, persistent_ptr<row> > r(keyValue, row_1);
   rows.insert(r);
-  if(transaction_started)
-    temprows.insert(r);
   DBUG_RETURN(0);
 }
 
@@ -1277,26 +1277,15 @@ std::multimap<const std::string, persistent_ptr<row> >& key::getRowsMap()
 {
   return rows;
 }
-
-std::multimap<const std::string, persistent_ptr<row> >& key::gettempRowsMap()
-{
-  return temprows;
-}
-
 void key::deleteRow(const persistent_ptr<row> &row_)
 {
   for (auto it = rows.begin(); it != rows.end(); ++it) {
-    if (it->second == row_) {
-      if (transaction_started) {
-        std::pair<const std::string, persistent_ptr<row> > r(it->first, it->second);
-        temprows.insert(r);
-      }
+    if (it->second == row_) { 
       rows.erase(it);
       break;
     }
   }
 }
-
 
 /**
   @brief
@@ -1328,6 +1317,30 @@ std::multimap<const std::string, persistent_ptr<row> >::iterator key::getLast()
   return rows.end();
 }
 
+void key::backupForRollBack()
+{
+  rollbackMap.insert(rows.begin(), rows.end());
+}
+
+void key::rollBackMap()
+{
+  if(!rollbackMap.empty())
+  {
+    rows.clear();
+    rows.insert(rollbackMap.begin(), rollbackMap.end());
+    rollbackMap.clear();
+  }
+}
+void key::clearRollbackMap()
+{
+  DBUG_ENTER("in key::clearRollbackMap");
+  if(!rollbackMap.empty())
+  {
+    DBUG_PRINT("info", ("in key::clearRollbackMap"));
+    rollbackMap.clear();
+  }
+  DBUG_VOID_RETURN;
+}
 
 /**
   @brief
@@ -1352,12 +1365,7 @@ bool key::updateRow(rowItr matchingEleIt, const std::string oldStr, const std::s
 
    if (matchingEleIt->first == oldStr) {
      row_ = matchingEleIt->second;
-     std::pair<const std::string, persistent_ptr<row> > r(newStr, row_);
-     if (transaction_started) {
-       std::pair<const std::string, persistent_ptr<row> > itr(matchingEleIt->first, matchingEleIt->second);
-       temprows.insert(itr);
-       temprows.insert(r);
-     }
+     std::pair<const std::string, persistent_ptr<row> > r(newStr, row_); 
      rows.erase(matchingEleIt);
      rows.insert(r);
      ret = true;
@@ -1419,6 +1427,20 @@ int table_::insert(const char* columnName, key* k)
   DBUG_RETURN(0);
 }
 
+bool table_::checkColumnsForRollBack()
+{
+  DBUG_ENTER("in table_::checkColumnsForRollBack");
+  for (auto it = keys.begin(); it!=keys.end(); ++it)
+    it->second->rollBackMap();
+  DBUG_RETURN(0);
+}
+bool table_::clearTransactionTempData()
+{
+  DBUG_ENTER("in table_::checkColumnsForRollBack");
+  for (auto it = keys.begin(); it!=keys.end(); ++it)
+    it->second->clearRollbackMap();
+  DBUG_RETURN(0);
+}
 /**
   @brief
 Function to return the Key Map
@@ -1456,10 +1478,14 @@ bool database::getTable(const char* tableName, table_ **t)
   DBUG_ENTER("in Gettable");
   DBUG_PRINT("info", ("in Gettable"));
   bool ret = false;
-  auto t1 = tables.find(tableName); 
-  if (t1 != tables.end()) { 
-    *t = t1->second;
-    ret = true;
+  for (auto table = tables.begin(); table!=tables.end(); ++table)
+  {
+    if(!strcmp(tableName,table->first))
+    {
+      *t = table->second;
+      ret = true;
+      break;
+    }
   }
   DBUG_RETURN(ret);
 }

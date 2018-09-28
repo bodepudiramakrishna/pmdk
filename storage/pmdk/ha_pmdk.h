@@ -326,7 +326,6 @@ class key
       bool updateRow(rowItr matchingEleIt, const std::string oldStr, const std::string newStr);
       void deleteRow(const persistent_ptr<row> &row);
       std::multimap<const std::string, persistent_ptr<row> >& getRowsMap();
-      std::multimap<const std::string, persistent_ptr<row> >& gettempRowsMap();
       void setMapPosition(rowItr iter);
       rowItr getFirst();
       rowItr getNext();
@@ -334,9 +333,12 @@ class key
       rowItr getLast();
       bool verifyKey(const std::string key);
       bool isRowEmpty();
+      void backupForRollBack();
+      void rollBackMap();
+      void clearRollbackMap();
    private:
       std::multimap<const std::string, persistent_ptr<row> > rows;
-      std::multimap<const std::string, persistent_ptr<row> > temprows;
+      std::multimap<const std::string, persistent_ptr<row> > rollbackMap;
       rowItr mapPosition;
 };
 
@@ -347,6 +349,8 @@ class table_
       int insert(const char* columnName, key*);
       bool deleteKey(const char* columnName);
       bool isKeysEmpty();	
+      bool checkColumnsForRollBack();	
+      bool clearTransactionTempData();	
       std::unordered_map<const char*, key*>& getKeysMap();
    private:
       std::unordered_map<const char*, key*> keys;
