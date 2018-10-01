@@ -689,7 +689,6 @@ int ha_pmdk::index_read_map(uchar *buf, const uchar *key_,
         convertedKey = IdentifyTypeAndConvertToString(key_, key_part->field->type(), key_part->field->key_length(), 2);
       else
         convertedKey = IdentifyTypeAndConvertToString(key_, key_part->field->type(), key_part->field->key_length());
-      std::cout<<"convertedKey ->"<<convertedKey<<std::endl;
 
       if (k->verifyKey(convertedKey)) { 
         rowItr currEle = k->getCurrent();
@@ -834,7 +833,6 @@ int ha_pmdk::index_read(uchar*  buf, const uchar* key, uint key_len, ha_rkey_fun
   DBUG_ENTER("ha_pmdk::index_last");
   DBUG_RETURN(0);
 }
-
 /**
   @brief
   rnd_init() is called when the system wants the storage engine to do a table
@@ -1349,13 +1347,18 @@ Function to verify the Key Value
 
 bool key::verifyKey(const std::string key)
 {
-   bool ret = false;
-   auto search = rows.find(key);
-   if (search != rows.end()) {
-     mapPosition = search;
-     ret = true;
-   }
-   return ret;
+  DBUG_ENTER("in key::verifyKey");
+  bool ret = false;
+  for (auto row = rows.begin(); row!=rows.end(); ++row)
+  {
+    if(!key.compare(row->first))
+    {
+      mapPosition = row;
+      ret = true;
+      break;
+    }
+  }
+  DBUG_RETURN(ret);
 }
 
 bool key::updateRow(rowItr matchingEleIt, const std::string oldStr, const std::string newStr)

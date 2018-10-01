@@ -150,13 +150,13 @@ public:
   */
   ulong index_flags(uint inx, uint part, bool all_parts) const
   {
-        ulong flags = HA_READ_NEXT | HA_READ_PREV | HA_READ_ORDER
-                      | HA_READ_RANGE | HA_KEYREAD_ONLY;
+    ulong flags = HA_READ_NEXT | HA_READ_PREV | HA_READ_ORDER
+                  | HA_READ_RANGE | HA_KEYREAD_ONLY;
+    return(flags);
 
-        return(flags);
   }
 
-  /** @brief
+    /** @brief
     unireg.cc will call max_supported_record_length(), max_supported_keys(),
     max_supported_key_parts(), uint max_supported_key_length()
     to make sure that the storage engine can handle the data it is about to
