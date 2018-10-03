@@ -463,7 +463,6 @@ int ha_pmdk::write_row(uchar *buf)
        insertRowIntoIndexTable(*field, convertedKey, row);
      }
    }
-
    DBUG_RETURN(err);
 }
 
@@ -510,27 +509,39 @@ std::string ha_pmdk::IdentifyTypeAndConvertToString(const uchar* key, int type,i
 int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
 {
   DBUG_ENTER("ha_pmdk::update_row");
-  DBUG_PRINT("info", ("update_row active_index : %d ",active_index));
-  if (active_index == 64) {
-    memcpy(current->buf, new_data, table->s->reclength);
-  } else { //Index table
-    KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
-    database *db = database::getInstance();
-    table_ *tab;
-    key *k;
-    std::string convertedOldData = IdentifyTypeAndConvertToString(old_data+1, key_part->field->type(),key_part->field->key_length(),1);
-    std::string convertedNewData = IdentifyTypeAndConvertToString(new_data+1, key_part->field->type(),key_part->field->key_length(),1);
-    if (db->getTable(table->s->table_name.str, &tab)) {
-      if (tab->getKeys(key_part->field->field_name.str, &k)) {
-        rowItr currNode = k->getCurrent();
-	rowItr prevNode = std::prev(currNode);
-	if (searchNode(prevNode->second)) {
-          memcpy(current->buf, new_data, table->s->reclength);
-          k->updateRow(prevNode, convertedOldData, convertedNewData);
-        }
-      }
-    }
+  int ix=0,inxColCt=0;
+  for (Field **field = table->field; *field; field++) {
+    if (ix == 0 && (*field)->key_start.to_ulonglong() == 0) // if first columns is non index
+      ix+=1;
+    if ((*field)->type() == 15) // If the column is VARCHAR
+      ix += 1;
+    if ((*field)->key_start.to_ulonglong() > 0) {
+      if (ix == 0 && (*field)->type() != 15) // If the first column is NOT VARCHAR
+        ix += 1;
+       std::string key_str = IdentifyTypeAndConvertToString(old_data+ix, (*field)->type(),(*field)->key_length(),1);
+       std::string field_str = IdentifyTypeAndConvertToString((*field)->ptr, (*field)->type(),(*field)->key_length(),1);
+       database *db = database::getInstance();
+       table_ *tab;
+       key *k;
+       if (key_str != field_str) {
+         if (db->getTable(table->s->table_name.str, &tab)) {
+           if (tab->getKeys((*field)->field_name.str, &k)) {
+             KEY* key_info = &table->key_info[inxColCt];
+             if (memcmp("PRIMARY",key_info->name.str,sizeof("PRIMARY"))==0)
+	       if (k->verifyKey(field_str))
+                 DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
+	     if (k->verifyKey(key_str))
+	       k->updateRow(key_str, field_str);
+           }
+         }
+         break;
+       }
+      ++inxColCt;
+     }
+    ix += (*field)->key_length();
   }
+  if(current)
+    memcpy(current->buf, new_data, table->s->reclength);
   DBUG_RETURN(0);
 }
 
@@ -694,6 +705,7 @@ int ha_pmdk::index_read_map(uchar *buf, const uchar *key_,
         rowItr currEle = k->getCurrent();
         memcpy(buf, currEle->second->buf, table->s->reclength);
 	k->setMapPosition(std::next(currEle));
+	current=currEle->second;
       } else
         rc = HA_ERR_END_OF_FILE;
     }
@@ -727,6 +739,7 @@ int ha_pmdk::index_next(uchar *buf)
       }
       memcpy(buf, currEle->second->buf, table->s->reclength);
       k1->setMapPosition(std::next(currEle));
+      current=currEle->second;
     } else
       rc = HA_ERR_END_OF_FILE;
   } else
@@ -778,6 +791,7 @@ int ha_pmdk::index_first(uchar *buf)
       }
       memcpy(buf, it->second->buf, table->s->reclength);
       k1->setMapPosition(std::next(it));
+      current=it->second;
     }
   } else 
     rc = HA_ERR_END_OF_FILE;
@@ -1351,7 +1365,7 @@ bool key::verifyKey(const std::string key)
   bool ret = false;
   for (auto row = rows.begin(); row!=rows.end(); ++row)
   {
-    if(!key.compare(row->first))
+    if (key == row->first)
     {
       mapPosition = row;
       ret = true;
@@ -1361,10 +1375,12 @@ bool key::verifyKey(const std::string key)
   DBUG_RETURN(ret);
 }
 
-bool key::updateRow(rowItr matchingEleIt, const std::string oldStr, const std::string newStr)
+bool key::updateRow(const std::string oldStr, const std::string newStr)
 {
+   DBUG_ENTER("in key::updateRow");
    persistent_ptr<row> row_;
    bool ret = false;
+   rowItr matchingEleIt = getCurrent();
 
    if (matchingEleIt->first == oldStr) {
      row_ = matchingEleIt->second;
@@ -1373,7 +1389,7 @@ bool key::updateRow(rowItr matchingEleIt, const std::string oldStr, const std::s
      rows.insert(r);
      ret = true;
    }
-   return ret;
+   DBUG_RETURN(ret);
 }
 
 bool database::deleteTable(const char* TableName)
