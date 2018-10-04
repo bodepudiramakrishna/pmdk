@@ -472,7 +472,7 @@ std::string ha_pmdk::IdentifyTypeAndConvertToString(const uchar* key, int type,i
   if(type == 15)
   {  
     len = key[0] + offset;
-    for (int i=offset; i<len; ++i) {
+    for (int i=offset; i<len && key[i]!='\0'; ++i) {
       key_.push_back(key[i]);
     }
   }
@@ -509,6 +509,7 @@ std::string ha_pmdk::IdentifyTypeAndConvertToString(const uchar* key, int type,i
 int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
 {
   DBUG_ENTER("ha_pmdk::update_row");
+  DBUG_PRINT("info", ("update_row"));
   int ix=0,inxColCt=0;
   for (Field **field = table->field; *field; field++) {
     if (ix == 0 && (*field)->key_start.to_ulonglong() == 0) // if first columns is non index
@@ -518,7 +519,7 @@ int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
     if ((*field)->key_start.to_ulonglong() > 0) {
       if (ix == 0 && (*field)->type() != 15) // If the first column is NOT VARCHAR
         ix += 1;
-       std::string key_str = IdentifyTypeAndConvertToString(old_data+ix, (*field)->type(),(*field)->key_length(),1);
+       std::string key_str = IdentifyTypeAndConvertToString(old_data+ix, (*field)->type(),(*field)->key_length());
        std::string field_str = IdentifyTypeAndConvertToString((*field)->ptr, (*field)->type(),(*field)->key_length(),1);
        database *db = database::getInstance();
        table_ *tab;
