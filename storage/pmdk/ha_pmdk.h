@@ -325,6 +325,7 @@ class key
       int insert(const std::string keyValue, persistent_ptr<row> row);
       bool updateRow(const std::string oldStr, const std::string newStr);
       void deleteRow(const persistent_ptr<row> &row);
+      void deleteALLRows();
       std::multimap<const std::string, persistent_ptr<row> >& getRowsMap();
       void setMapPosition(rowItr iter);
       rowItr getFirst();
