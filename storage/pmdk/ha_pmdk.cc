@@ -303,8 +303,13 @@ int ha_pmdk::open(const char *name, int mode, uint test_if_locked)
   if (objtab == NULL)
     DBUG_RETURN(errCodeMap[errno]);
 
-  // update the MAP when restart the server
   proot = pmemobj_root(objtab, sizeof (root));
+  // update the MAP when start occured
+  loadIndexTableFromPersistentMemory();
+  DBUG_RETURN(0);
+}
+void ha_pmdk::loadIndexTableFromPersistentMemory(void)
+{
   persistent_ptr<row> row = proot->rows;
   while(row)
   {
@@ -329,9 +334,7 @@ int ha_pmdk::open(const char *name, int mode, uint test_if_locked)
     }
     row = row->next;
   }
-  DBUG_RETURN(0);
 }
-
 void ha_pmdk::insertRowIntoIndexTable(Field *field, std::string key_, persistent_ptr<row> row)
 {
   database *db = database::getInstance();
@@ -418,31 +421,10 @@ int ha_pmdk::write_row(uchar *buf)
   DBUG_ENTER("ha_pmdk::write_row");
   DBUG_PRINT("info", ("write_row"));
   int err = 0;
-  uchar *key_ = 0;
 
-  database *db = database::getInstance();
-  table_ *tab;
-  key *k;
+  if(isPrimaryKey() == true)
+    DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
 
-  // Primary Key Start
-  for (int i= 0; i < table->s->keys; i++) {
-    KEY* key_info = &table->key_info[i];
-    if (memcmp("PRIMARY",key_info->name.str,sizeof("PRIMARY"))==0) {
-       Field *field = key_info->key_part->field;
-       key_ = (uchar *)my_malloc(field->field_length, MYF(MY_ZEROFILL | MY_WME));
-       memcpy(key_, field->ptr, field->key_length()); 
-       std::string convertedKey = IdentifyTypeAndConvertToString(key_, field->type(),field->key_length(),1);
-       if (db->getTable(table->s->table_name.str, &tab)) {
-          if (tab->getKeys(field->field_name.str, &k)) {
-	     if (k->verifyKey(convertedKey)) {
-  	        DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
-	     }
-          }
-       }
-       my_free(key_);
-    }
-  } 
-  //persistent_ptr<root> proot = pmemobj_root(objtab, sizeof (root));
   persistent_ptr<row> row;
   TX_BEGIN(objtab) {
     row = pmemobj_tx_alloc(sizeof (row) + table->s->reclength, 0);
@@ -456,16 +438,13 @@ int ha_pmdk::write_row(uchar *buf)
   stats.records++;
   for (Field **field = table->field; *field; field++)
   {
-     if ((*field)->key_start.to_ulonglong() >= 1)
-     {
-       key_ = (uchar *)my_malloc((*field)->field_length, MYF(MY_ZEROFILL | MY_WME));
-       memcpy(key_, (*field)->ptr, (*field)->key_length());
-       std::string convertedKey = IdentifyTypeAndConvertToString(key_, (*field)->type(),(*field)->key_length(),1);
-       insertRowIntoIndexTable(*field, convertedKey, row);
-       my_free(key_);
-     }
-   }
-   DBUG_RETURN(err);
+    if ((*field)->key_start.to_ulonglong() >= 1)
+    {
+      std::string convertedKey = IdentifyTypeAndConvertToString((*field)->ptr, (*field)->type(),(*field)->key_length(),1);
+      insertRowIntoIndexTable(*field, convertedKey, row);
+    }
+  }
+  DBUG_RETURN(err);
 }
 
 std::string ha_pmdk::IdentifyTypeAndConvertToString(const uchar* key, int type,int len,int offset)
@@ -485,7 +464,29 @@ std::string ha_pmdk::IdentifyTypeAndConvertToString(const uchar* key, int type,i
   }
   return key_;
 }
-
+bool ha_pmdk::isPrimaryKey(void)
+{
+  bool ret = false;
+  database *db = database::getInstance();
+  table_ *tab;
+  key *k;
+  for (unsigned int i= 0; i < table->s->keys; i++) {
+    KEY* key_info = &table->key_info[i];
+    if (memcmp("PRIMARY",key_info->name.str,sizeof("PRIMARY"))==0) {
+      Field *field = key_info->key_part->field;
+      std::string convertedKey = IdentifyTypeAndConvertToString(field->ptr, field->type(),field->key_length(),1);
+      if (db->getTable(table->s->table_name.str, &tab)) {
+        if (tab->getKeys(field->field_name.str, &k)) {
+          if (k->verifyKey(convertedKey)) {
+	    ret = true;
+	    break;
+	  }
+        }
+      }
+    }
+  }
+  return ret;
+}
 
 /**
   @brief
@@ -536,7 +537,6 @@ int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
       database *db = database::getInstance();
       table_ *tab;
       key *k;
-      DBUG_PRINT("info", ("update_row key_str :%s field_str :%s ",key_str,field_str));
       if (key_str != field_str) {
         if (db->getTable(table->s->table_name.str, &tab)) {
           if (tab->getKeys((*field)->field_name.str, &k)) {
@@ -642,7 +642,7 @@ void ha_pmdk::deleteRowFromAllIndexedColumns(const persistent_ptr<row> &row)
   table_ *tab;
   key *k;
 
-  for (int i= 0; i < table->s->keys; ++i) {
+  for (unsigned int i= 0; i < table->s->keys; ++i) {
     KEY* key_info = &table->key_info[i];
     Field *field = key_info->key_part->field;
     if (db->getTable(table->s->table_name.str, &tab)) {
@@ -683,6 +683,7 @@ int ha_pmdk::deleteNodeFromSLL()
       current = nullptr; 
     } TX_END
   }
+  return 0;
 }
 
 /**
@@ -700,7 +701,6 @@ int ha_pmdk::index_read_map(uchar *buf, const uchar *key_,
   int rc = 0;
   DBUG_ENTER("ha_pmdk::index_read");
   DBUG_PRINT("info", ("index_read_map"));
-  uchar *key_buff;
 
   KEY_PART_INFO *key_part = table->key_info[active_index].key_part;
   database *db = database::getInstance();
@@ -1094,7 +1094,7 @@ int ha_pmdk::external_lock(THD *thd, int lock_type)
       database *db = database::getInstance();
       table_ *tab;
       key *k;
-      for (int i= 0; i < table->s->keys; ++i) {
+      for (unsigned int i= 0; i < table->s->keys; ++i) {
         KEY* key_info = &table->key_info[i];
         Field *field = key_info->key_part->field;
         if (db->getTable(table->s->table_name.str, &tab)) {
@@ -1186,7 +1186,7 @@ int ha_pmdk::delete_table(const char *name)
   key *k;
 
   if (db->getTable(name, &tab)) {
-    for (int i= 0; i < table->s->keys; ++i) {
+    for (unsigned int i= 0; i < table->s->keys; ++i) {
       KEY* key_info = &table->key_info[i];
       Field *field = key_info->key_part->field;
       if (tab->getKeys(field->field_name.str, &k)) {

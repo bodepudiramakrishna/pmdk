@@ -316,6 +316,8 @@ public:
   bool searchNode(const persistent_ptr<row> &rowPtr);
   std::string IdentifyTypeAndConvertToString(const uchar*, int,int len=0,int offset=0);
   void deleteRowFromAllIndexedColumns(const persistent_ptr<row> &row);
+  bool isPrimaryKey(void);
+  void loadIndexTableFromPersistentMemory(void);
 };
 
 
