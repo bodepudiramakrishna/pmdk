@@ -311,26 +311,24 @@ int ha_pmdk::open(const char *name, int mode, uint test_if_locked)
 void ha_pmdk::loadIndexTableFromPersistentMemory(void)
 {
   persistent_ptr<row> row = proot->rows;
-  while(row)
-  {
+  while(row) {
     int ix = 0;
     std::string convertedKey;
-    for (Field **field = table->field; *field; field++)
-    {
-	if (ix == 0 && (*field)->key_start.to_ulonglong() == 0) // if first columns is non index 
-	  ix+=1;
-        if ((*field)->type() == 15) // If the column is VARCHAR
+    for (Field **field = table->field; *field; field++) {
+      if (ix == 0 && (*field)->key_start.to_ulonglong() == 0) // if first columns is non index 
+        ix+=1;
+      if ((*field)->type() == 15) // If the column is VARCHAR
+        ix += 1; 
+      if ((*field)->key_start.to_ulonglong() > 0) { // for index column
+        if (ix == 0 && (*field)->type() != 15) // If the first column is NOT VARCHAR
           ix += 1; 
-        if ((*field)->key_start.to_ulonglong() > 0) { // for index column
-          if (ix == 0 && (*field)->type() != 15) // If the first column is NOT VARCHAR
-            ix += 1; 
-          if ((*field)->type() == 15) // If the column is VARCHAR
-	    convertedKey = IdentifyTypeAndConvertToString(row->buf+(ix-1), (*field)->type(),row->buf[ix-1],1);
-	  else
-	    convertedKey = IdentifyTypeAndConvertToString(row->buf+ix,(*field)->type(),(*field)->key_length());
-	  insertRowIntoIndexTable(*field, convertedKey, row);
-        }
-        ix += (*field)->key_length();   
+        if ((*field)->type() == 15) // If the column is VARCHAR
+	  convertedKey = IdentifyTypeAndConvertToString(row->buf+(ix-1), (*field)->type(),row->buf[ix-1],1);
+	else
+	  convertedKey = IdentifyTypeAndConvertToString(row->buf+ix,(*field)->type(),(*field)->key_length());
+	insertRowIntoIndexTable(*field, convertedKey, row);
+      }
+      ix += (*field)->key_length();   
     }
     row = row->next;
   }
@@ -422,7 +420,7 @@ int ha_pmdk::write_row(uchar *buf)
   DBUG_PRINT("info", ("write_row"));
   int err = 0;
 
-  if(isPrimaryKey() == true)
+  if (isPrimaryKey() == true)
     DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
 
   persistent_ptr<row> row;
@@ -431,15 +429,14 @@ int ha_pmdk::write_row(uchar *buf)
     memcpy(row->buf, buf, table->s->reclength);
     row->next = proot->rows;
     proot->rows = row;
-  }TX_ONABORT {
-  DBUG_PRINT("info", ("write_row_abort errno :%d ",errno));
-	  err = errno;
+  } TX_ONABORT {
+    DBUG_PRINT("info", ("write_row_abort errno :%d ",errno));
+    err = errno;
   } TX_END
   stats.records++;
-  for (Field **field = table->field; *field; field++)
-  {
-    if ((*field)->key_start.to_ulonglong() >= 1)
-    {
+
+  for (Field **field = table->field; *field; field++) {
+    if ((*field)->key_start.to_ulonglong() >= 1) {
       std::string convertedKey = IdentifyTypeAndConvertToString((*field)->ptr, (*field)->type(),(*field)->key_length(),1);
       insertRowIntoIndexTable(*field, convertedKey, row);
     }
@@ -450,20 +447,18 @@ int ha_pmdk::write_row(uchar *buf)
 std::string ha_pmdk::IdentifyTypeAndConvertToString(const uchar* key, int type,int len,int offset)
 {
   std::string key_ = "";
-  if (type == 15)
-  {  
+  if (type == 15) {  
     len = key[0] + offset;
     for (int i=offset; i<len; ++i)
       key_.push_back(key[i]);
-  }
-  else
-  {
+  } else {
     int64 val = 0;
     memcpy(&val, key,len);
     key_ = std::string(std::to_string(val));
   }
   return key_;
 }
+
 bool ha_pmdk::isPrimaryKey(void)
 {
   bool ret = false;
@@ -524,16 +519,14 @@ int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
     if ((*field)->key_start.to_ulonglong() > 0) {
       if (ix == 0 && (*field)->type() != 15) // If the first column is NOT VARCHAR
         ix += 1;
-      if ((*field)->type() == 15) // If the column is VARCHAR
-      {
+      if ((*field)->type() == 15) { // If the column is VARCHAR
         key_str = IdentifyTypeAndConvertToString(old_data+(ix-1), (*field)->type(),old_data[ix-1],1);
         field_str = IdentifyTypeAndConvertToString(new_data+(ix-1), (*field)->type(),new_data[ix-1],1);
-      }
-      else
-      {
+      } else {
         key_str = IdentifyTypeAndConvertToString(old_data+ix, (*field)->type(),(*field)->key_length());
         field_str = IdentifyTypeAndConvertToString((*field)->ptr, (*field)->type(),(*field)->key_length());
       }
+
       database *db = database::getInstance();
       table_ *tab;
       key *k;
@@ -554,8 +547,10 @@ int ha_pmdk::update_row(const uchar *old_data, const uchar *new_data)
     }
     ix += (*field)->key_length();
   }
-  if(current)
+
+  if (current)
     memcpy(current->buf, new_data, table->s->reclength);
+
   DBUG_RETURN(0);
 }
 
@@ -656,14 +651,12 @@ void ha_pmdk::deleteRowFromAllIndexedColumns(const persistent_ptr<row> &row)
 int ha_pmdk::deleteNodeFromSLL()
 {
   if (!prev) {
-    if (!current->next) { 
-// When sll contains single node
+    if (!current->next) { // When sll contains single node
       TX_BEGIN(objtab) {
 	delete_persistent<row>(current);
 	proot->rows = nullptr;
       } TX_END
-    } else { 
-// When deleting the first node of sll
+    } else { // When deleting the first node of sll
       TX_BEGIN(objtab) {
         delete_persistent<row>(current);
         proot->rows = current->next;
@@ -671,11 +664,9 @@ int ha_pmdk::deleteNodeFromSLL()
       } TX_END
     }
   } else {
-    if (!current->next) { 
-// When deleting the last node of sll
+    if (!current->next) { // When deleting the last node of sll
       prev->next = nullptr;
-    } else { 
-// When deleting other nodes of sll
+    } else { // When deleting other nodes of sll
       prev->next = current->next;    
     }
     TX_BEGIN(objtab) {
@@ -710,16 +701,18 @@ int ha_pmdk::index_read_map(uchar *buf, const uchar *key_,
   if (db->getTable(table->s->table_name.str, &tab)) {
     if (tab->getKeys(key_part->field->field_name.str, &k)) {
       std::string convertedKey;
+      int offset = 0;
       if (key_part->field->type() == 15)   // If the column is VARCHAR
-        convertedKey = IdentifyTypeAndConvertToString(key_, key_part->field->type(), key_part->field->key_length(), 2);
-      else
-        convertedKey = IdentifyTypeAndConvertToString(key_, key_part->field->type(), key_part->field->key_length());
-
+        offset = 2;
+      convertedKey = IdentifyTypeAndConvertToString(key_, key_part->field->type(), key_part->field->key_length(), offset);
       if (k->verifyKey(convertedKey)) { 
         rowItr currEle = k->getCurrent();
+        if (currEle == k->getLast()) {
+	  DBUG_RETURN(HA_ERR_END_OF_FILE);
+        }
         memcpy(buf, currEle->second->buf, table->s->reclength);
 	k->setMapPosition(std::next(currEle));
-	current=currEle->second;
+	current = currEle->second;
       } else
         rc = HA_ERR_END_OF_FILE;
     }
@@ -1081,12 +1074,10 @@ int ha_pmdk::external_lock(THD *thd, int lock_type)
 {
   DBUG_ENTER("ha_pmdk::external_lock");
   DBUG_PRINT("info", ("external_lock"));
-  DBUG_PRINT("info", ("external_lock locktype :%d",lock_type));
-  if (lock_type != F_UNLCK)
-  {
+
+  if (lock_type != F_UNLCK) {
     trans_register_ha(thd,FALSE,ht);
-    if (!transaction_started && thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN))
-    {
+    if (!transaction_started && thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN)) {
       trans_register_ha(thd,TRUE,ht);
       DBUG_PRINT("info", ("pmemobj_tx_begin %d ",pmemobj_tx_begin(objtab,NULL,TX_PARAM_NONE)));
       transaction_started = 1;
@@ -1106,6 +1097,7 @@ int ha_pmdk::external_lock(THD *thd, int lock_type)
       }
     }
   }
+
   DBUG_RETURN(0);
 }
 
@@ -1197,10 +1189,8 @@ int ha_pmdk::delete_table(const char *name)
     db->deleteTable(name);
   }
   objtab = pmemobj_open(path, name);
-  if (objtab != NULL)
-  {
-    while(proot->rows)
-    {
+  if (objtab != NULL) {
+    while(proot->rows) {
       current = proot->rows;
       proot->rows = current->next;
       TX_BEGIN(objtab) {
@@ -1264,8 +1254,7 @@ int ha_pmdk::create(const char *name, TABLE *table_arg,
 
   snprintf(path, MAX_PATH_LEN, "%s%s", name, PMEMOBJ_EXT);
   PMEMobjpool *pop = pmemobj_create(path, name,PMEMOBJ_MIN_POOL, S_IRWXU);
-  if (pop == NULL)
-  {
+  if (pop == NULL) {
     DBUG_PRINT("info", ("failed : %s error number : %d",path,errCodeMap[errno]));
     DBUG_RETURN(errCodeMap[errno]);
   } 
@@ -1286,51 +1275,11 @@ Function to insert the row value in the index row map
 int key::insert(const std::string keyValue, persistent_ptr<row> row_1)
 {
   DBUG_ENTER("in key::insert");
-  DBUG_PRINT("info", ("in key::insert %s",keyValue.c_str()));
-
   std::pair<const std::string, persistent_ptr<row> > r(keyValue, row_1);
   rows.insert(r);
   DBUG_RETURN(0);
 }
 
-
-bool key::isRowEmpty()
-{
-   bool ret = false;
-   if (rows.empty()) {
-      ret = true;
-   }
-   return ret;
-}
-
-bool table_::isKeysEmpty()
-{
-   bool ret = false;
-   if (keys.empty()) {
-      ret = true;
-   }
-   return ret;
-}
-
-bool database::isTablesEmpty()
-{
-   bool ret = false;
-   if (tables.empty()) {
-      ret = true;
-   }
-   return ret;
-}
-
-/**
-  @brief
-Function to update the row value in the Index row Map
-
-*/
-
-std::multimap<const std::string, persistent_ptr<row> >& key::getRowsMap()
-{
-  return rows;
-}
 void key::deleteRow(const persistent_ptr<row> &row_)
 {
   for (auto it = rows.begin(); it != rows.end(); ++it) {
@@ -1340,6 +1289,7 @@ void key::deleteRow(const persistent_ptr<row> &row_)
     }
   }
 }
+
 void key::deleteALLRows()
 {
   rows.clear();
@@ -1350,27 +1300,22 @@ void key::deleteALLRows()
 Function to set the Map position
 */
 
-void key::setMapPosition(std::multimap<const std::string, persistent_ptr<row> >::iterator iter)
+void key::setMapPosition(rowItr iter)
 {
   mapPosition = iter;
 }
 
-std::multimap<const std::string, persistent_ptr<row> >::iterator key::getFirst()
+rowItr key::getFirst()
 {
   return rows.begin();
 }
 
-std::multimap<const std::string, persistent_ptr<row> >::iterator key::getCurrent()
+rowItr key::getCurrent()
 {
   return mapPosition;
 }
 
-std::multimap<const std::string, persistent_ptr<row> >::iterator key::getNext()
-{
-  return ++mapPosition;
-}
-
-std::multimap<const std::string, persistent_ptr<row> >::iterator key::getLast()
+rowItr key::getLast()
 {
   return rows.end();
 }
@@ -1382,8 +1327,7 @@ void key::backupForRollBack()
 
 void key::rollBackMap()
 {
-  if(!rollbackMap.empty())
-  {
+  if (!rollbackMap.empty()) {
     rows.clear();
     rows.insert(rollbackMap.begin(), rollbackMap.end());
     rollbackMap.clear();
@@ -1392,11 +1336,8 @@ void key::rollBackMap()
 void key::clearRollbackMap()
 {
   DBUG_ENTER("in key::clearRollbackMap");
-  if(!rollbackMap.empty())
-  {
-    DBUG_PRINT("info", ("in key::clearRollbackMap"));
+  if (!rollbackMap.empty())
     rollbackMap.clear();
-  }
   DBUG_VOID_RETURN;
 }
 
@@ -1409,10 +1350,8 @@ bool key::verifyKey(const std::string key)
 {
   DBUG_ENTER("in key::verifyKey");
   bool ret = false;
-  for (auto row = rows.begin(); row!=rows.end(); ++row)
-  {
-    if (key == row->first)
-    {
+  for (auto row = rows.begin(); row!=rows.end(); ++row) {
+    if (key == row->first) {
       mapPosition = row;
       ret = true;
       break;
@@ -1468,13 +1407,12 @@ bool table_::getKeys(const char* columnName, key **p)
 {
   DBUG_ENTER("in getKeys");
   DBUG_PRINT("info", ("in getKeys"));
-   bool ret = false;
-   auto k = keys.find(columnName);
-   if (k != keys.end())
-   {
-      *p = k->second;
-      ret = true;
-   }
+  bool ret = false;
+  auto k = keys.find(columnName);
+  if (k != keys.end()) {
+    *p = k->second;
+    ret = true;
+  }
   DBUG_RETURN(ret);
 }
 
@@ -1508,28 +1446,15 @@ bool table_::clearTransactionTempData()
 }
 /**
   @brief
-Function to return the Key Map
-*/
-
-
-std::unordered_map<const char*, key*>& table_::getKeysMap()
-{
-  return keys;
-}
-
-/**
-  @brief
 Function to get the instance of the Database Class
 */
-
-
 database* database::getInstance()
 { 
   DBUG_ENTER("in Getinstance");
   DBUG_PRINT("info", ("in Getinstance"));
-   if (!m_db)
-      m_db = new database();
-   DBUG_RETURN(m_db);
+  if (!m_db)
+    m_db = new database();
+  DBUG_RETURN(m_db);
 }
 
 /**
@@ -1543,10 +1468,8 @@ bool database::getTable(const char* tableName, table_ **t)
   DBUG_ENTER("in Gettable");
   DBUG_PRINT("info", ("in Gettable"));
   bool ret = false;
-  for (auto table = tables.begin(); table!=tables.end(); ++table)
-  {
-    if(!strcmp(tableName,table->first))
-    {
+  for (auto table = tables.begin(); table!=tables.end(); ++table) {
+    if(!strcmp(tableName,table->first)) {
       *t = table->second;
       ret = true;
       break;
@@ -1565,15 +1488,9 @@ int database::insert(const char* tableName, table_* t)
 {
   DBUG_ENTER("database::insert");
   DBUG_PRINT("info", ("database::insert "));
-
   std::pair<const char*, table_*> table(tableName, t);
   tables.insert (table);
-
   DBUG_RETURN(0);
-}
-std::unordered_map<const char*, table_*>& database::getTablesMap()
-{
-  return tables;
 }
 
 struct st_mysql_storage_engine pmdk_storage_engine=

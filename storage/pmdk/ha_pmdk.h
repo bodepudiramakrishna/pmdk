@@ -61,20 +61,20 @@ POBJ_LAYOUT_END(mysql_obj);
 typedef std::multimap<const std::string, persistent_ptr<row> >::iterator rowItr;
 
 struct table_row {
-    uchar buf[PMEMOBJ_MIN_POOL];
+  uchar buf[PMEMOBJ_MIN_POOL];
 };
 struct row_args {
-	uchar *buf;
-	size_t len;
+  uchar *buf;
+  size_t len;
 };
 
 struct row {
-    persistent_ptr<row> next;
-    uchar buf[];
+  persistent_ptr<row> next;
+  uchar buf[];
 };
 
 struct root {
-    persistent_ptr<row> rows;
+  persistent_ptr<row> rows;
 };
 
 /** @brief
@@ -328,14 +328,11 @@ class key
       bool updateRow(const std::string oldStr, const std::string newStr);
       void deleteRow(const persistent_ptr<row> &row);
       void deleteALLRows();
-      std::multimap<const std::string, persistent_ptr<row> >& getRowsMap();
       void setMapPosition(rowItr iter);
       rowItr getFirst();
-      rowItr getNext();
       rowItr getCurrent();
       rowItr getLast();
       bool verifyKey(const std::string key);
-      bool isRowEmpty();
       void backupForRollBack();
       void rollBackMap();
       void clearRollbackMap();
@@ -351,10 +348,8 @@ class table_
       bool getKeys(const char* columnName, key **p);
       int insert(const char* columnName, key*);
       bool deleteKey(const char* columnName);
-      bool isKeysEmpty();	
       bool checkColumnsForRollBack();	
       bool clearTransactionTempData();	
-      std::unordered_map<const char*, key*>& getKeysMap();
    private:
       std::unordered_map<const char*, key*> keys;
 };
@@ -366,9 +361,6 @@ class database
       bool getTable(const char* tableName,table_ **t);
       int insert(const char* tableName, table_*);
       bool deleteTable(const char* TableName);
-      bool isTablesEmpty();
-      std::unordered_map<const char*, table_*>& getTablesMap();
-     
    private:
       database(){}
       database(const database &){}
