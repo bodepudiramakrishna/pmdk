@@ -167,7 +167,7 @@ int ha_pmdk::start_stmt(THD *thd, thr_lock_type lock_type)
   if (!transaction_started && thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN))
   {
     trans_register_ha(thd,TRUE,ht);
-    DBUG_PRINT("info", ("pmemobj_tx_begin %d ",pmemobj_tx_begin(objtab,NULL,TX_PARAM_NONE)));
+    pmemobj_tx_begin(objtab,NULL,TX_PARAM_NONE);
     transaction_started = 1;
   }
   DBUG_RETURN(0);
@@ -1079,7 +1079,7 @@ int ha_pmdk::external_lock(THD *thd, int lock_type)
     trans_register_ha(thd,FALSE,ht);
     if (!transaction_started && thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN)) {
       trans_register_ha(thd,TRUE,ht);
-      DBUG_PRINT("info", ("pmemobj_tx_begin %d ",pmemobj_tx_begin(objtab,NULL,TX_PARAM_NONE)));
+      pmemobj_tx_begin(objtab,NULL,TX_PARAM_NONE);
       transaction_started = 1;
 
       database *db = database::getInstance();
